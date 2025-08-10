@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-automation",
+  "version": "1.0.0",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "build": "bash build.sh",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "firebase-admin": "^13.4.0",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.54.2"
+  }
+}

@@ -1,0 +1,12 @@
+# Ficheiros de dependências
+node_modules
+
+# Pasta da sessão do Playwright (contém dados de login)
+whatsapp_session_data/
+
+# Chave secreta do Firebase - NUNCA ENVIE ESTE FICHEIRO!
+firebase-service-account.json
+
+# Ficheiros de log e sistema
+npm-debug.log*
+.DS_Store
