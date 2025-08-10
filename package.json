@@ -7,10 +7,6 @@
     "build": "bash build.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
     "firebase-admin": "^13.4.0",
     "node-cron": "^3.0.3",

@@ -5,5 +5,5 @@ set -o errexit
 # 1. Instala as dependências do package.json
 npm install
 
-# 2. Instala os navegadores do Playwright sem gerir as dependências do sistema
+# 2. Instala os navegadores do Playwright da forma correta para o Render
 npx playwright install
