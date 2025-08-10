@@ -1,7 +1,8 @@
 const { chromium } = require('playwright');
 const admin = require('firebase-admin');
 const cron = require('node-cron');
-const { query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc } = require('firebase/firestore');
+// A CORREÇÃO ESTÁ AQUI: Importamos tudo diretamente do 'firebase-admin/firestore'.
+const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO INTELIGENTE ---
 let serviceAccount;
@@ -16,12 +17,13 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
-const USER_DATA_DIR = './whatsapp_session_data'; // A sessão será salva no disco do Render
+const USER_DATA_DIR = '/var/data/whatsapp_session_data'; // Caminho recomendado para discos persistentes no Render
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
-const db = admin.firestore();
+// Usamos a função importada para obter a referência do banco de dados.
+const db = getFirestore();
 
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
 function delay(minSeconds, maxSeconds) { const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000; console.log(`[HUMANIZADOR] Pausa de ${Math.round(ms/1000)} segundos...`); return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -104,7 +106,7 @@ cron.schedule('* * * * *', async () => {
   console.log(`[CRON][${new Date().toLocaleTimeString('pt-BR')}] Verificando campanhas agendadas...`);
   
   const agora = new Date();
-  const q = query(collection(db, 'campanhas'), where('status', '==', 'pendente'), where('agamento', '<=', agora), orderBy('agendamento', 'asc'), limit(1));
+  const q = query(collection(db, 'campanhas'), where('status', '==', 'pendente'), where('agendamento', '<=', agora), orderBy('agendamento', 'asc'), limit(1));
   
   const snapshot = await getDocs(q);
   if (snapshot.empty) {
