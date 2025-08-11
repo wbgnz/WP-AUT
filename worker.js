@@ -14,7 +14,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
-const USER_DATA_DIR = path.join('/tmp', 'whatsapp_session_data');
+const USER_DATA_DIR = path.join(__dirname, 'session'); // ✅ compatível com Windows
 if (!fs.existsSync(USER_DATA_DIR)) {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
 }
@@ -101,7 +101,7 @@ async function executarCampanha(campanha) {
     console.log(`[WORKER] ${contatosParaEnviar.length} contatos serão processados.`);
 
     context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-      headless: true,
+      headless: false, // ✅ navegador visível para testes
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
@@ -109,9 +109,18 @@ async function executarCampanha(campanha) {
     const page = pages.length > 0 ? pages[0] : await context.newPage();
     page.setDefaultTimeout(90000);
 
-    await page.goto('https://web.whatsapp.com', { waitUntil: 'networkidle' });
+    console.log('[WHATSAPP] Acessando WhatsApp Web...');
+    await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(5000);
-    await page.waitForSelector('div#pane-side', { state: 'visible' });
+
+    try {
+      await page.waitForSelector('div#pane-side', { timeout: 60000 });
+      console.log('[WHATSAPP] WhatsApp carregado com sucesso.');
+    } catch (e) {
+      await page.screenshot({ path: path.join(__dirname, `erro-login-${campanha.id}.png`) });
+      throw new Error('WhatsApp Web não carregou. Escaneie o QR Code ou verifique a conexão.');
+    }
+
     await handlePopups(page);
 
     const mensagemTemplate = campanha.mensagemTemplate;
@@ -123,20 +132,24 @@ async function executarCampanha(campanha) {
 
       await page.goto(`https://web.whatsapp.com/send?phone=${contato.numero}`, { waitUntil: 'domcontentloaded' });
 
-      const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' }).getByRole('paragraph');
-      await messageBox.waitFor({ timeout: 10000 });
-      await typeLikeHuman(messageBox, mensagemFinal);
+      try {
+        const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' }).getByRole('paragraph');
+        await messageBox.waitFor({ timeout: 10000 });
+        await typeLikeHuman(messageBox, mensagemFinal);
 
-      const sendButton = page.getByLabel('Enviar');
-      await sendButton.waitFor({ timeout: 5000 });
-      await sendButton.click();
+        const sendButton = page.getByLabel('Enviar');
+        await sendButton.waitFor({ timeout: 5000 });
+        await sendButton.click();
 
-      const contatoRef = db.collection('contatos').doc(contato.id);
-      await contatoRef.update({ status: 'usado' });
+        const contatoRef = db.collection('contatos').doc(contato.id);
+        await contatoRef.update({ status: 'usado' });
 
-      console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
-      await delay(campanha.minDelay, campanha.maxDelay);
-      logMemoryUsage();
+        console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
+        await delay(campanha.minDelay, campanha.maxDelay);
+        logMemoryUsage();
+      } catch (e) {
+        console.error(`[ERRO] Falha ao enviar para ${contato.numero}:`, e.message);
+      }
     }
 
     await campanhaRef.update({ status: 'concluida' });
@@ -146,7 +159,7 @@ async function executarCampanha(campanha) {
     await campanhaRef.update({ status: 'erro', erroMsg: error.message });
 
     try {
-      const screenshotPath = `/tmp/erro-${campanha.id}.png`;
+      const screenshotPath = path.join(__dirname, `erro-${campanha.id}.png`);
       await context?.pages?.()[0]?.screenshot({ path: screenshotPath });
       console.log(`[DEBUG] Screenshot salvo em ${screenshotPath}`);
     } catch (screenshotError) {
@@ -192,3 +205,5 @@ app.post('/start-campaign', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
 });
+
+// --- MANTÉM O PROCESSO VIVO
