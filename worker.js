@@ -24,6 +24,22 @@ admin.initializeApp({
 });
 const db = getFirestore();
 
+// --- MONITORAMENTO DO SISTEMA ---
+process.on('SIGTERM', () => {
+  console.log('[SYSTEM] Recebido SIGTERM. Encerrando processo...');
+  logMemoryUsage();
+  process.exit(0);
+});
+
+function logMemoryUsage() {
+  const used = process.memoryUsage();
+  console.log('[MEMÓRIA] Uso atual:', {
+    rss: `${Math.round(used.rss / 1024 / 1024)} MB`,
+    heapTotal: `${Math.round(used.heapTotal / 1024 / 1024)} MB`,
+    heapUsed: `${Math.round(used.heapUsed / 1024 / 1024)} MB`
+  });
+}
+
 // --- FUNÇÕES AUXILIARES ---
 function delay(minSeconds, maxSeconds) {
   const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000;
@@ -120,6 +136,7 @@ async function executarCampanha(campanha) {
 
       console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
       await delay(campanha.minDelay, campanha.maxDelay);
+      logMemoryUsage();
     }
 
     await campanhaRef.update({ status: 'concluida' });
