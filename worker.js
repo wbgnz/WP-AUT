@@ -14,7 +14,6 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
-// No Render, só /tmp é gravável
 const USER_DATA_DIR = path.join('/tmp', 'whatsapp_session_data');
 if (!fs.existsSync(USER_DATA_DIR)) {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
@@ -25,10 +24,10 @@ admin.initializeApp({
 });
 const db = getFirestore();
 
-// --- FUNÇÕES DO ROBÔ ---
+// --- FUNÇÕES AUXILIARES ---
 function delay(minSeconds, maxSeconds) {
   const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000;
-  console.log(`[HUMANIZADOR] Pausa de ${Math.round(ms/1000)} segundos...`);
+  console.log(`[HUMANIZADOR] Pausa de ${Math.round(ms / 1000)} segundos...`);
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -52,7 +51,7 @@ async function handlePopups(page) {
       await selector.click({ force: true });
       console.log('[FASE 2] Pop-up fechado.');
       return;
-    } catch (error) {}
+    } catch (_) {}
   }
   console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.');
 }
@@ -62,6 +61,7 @@ async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
   const campanhaRef = db.collection('campanhas').doc(campanha.id);
   let context;
+
   try {
     await campanhaRef.update({ status: 'rodando' });
     let contatosParaEnviar = [];
@@ -89,10 +89,12 @@ async function executarCampanha(campanha) {
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
-    const page = context.pages()[0];
+    const pages = context.pages();
+    const page = pages.length > 0 ? pages[0] : await context.newPage();
     page.setDefaultTimeout(90000);
 
-    await page.goto('https://web.whatsapp.com');
+    await page.goto('https://web.whatsapp.com', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(5000);
     await page.waitForSelector('div#pane-side', { state: 'visible' });
     await handlePopups(page);
 
@@ -101,14 +103,16 @@ async function executarCampanha(campanha) {
       console.log(`--------------------------------------------------`);
       console.log(`[DISPARO] Preparando para ${contato.nome || contato.numero}`);
 
-      let mensagemFinal = mensagemTemplate.replace(new RegExp(`{{nome}}`, 'g'), contato.nome);
+      let mensagemFinal = mensagemTemplate.replace(/{{nome}}/g, contato.nome);
 
-      await page.goto(`https://web.whatsapp.com/send?phone=${contato.numero}`);
+      await page.goto(`https://web.whatsapp.com/send?phone=${contato.numero}`, { waitUntil: 'domcontentloaded' });
+
       const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' }).getByRole('paragraph');
-      await messageBox.waitFor();
+      await messageBox.waitFor({ timeout: 10000 });
       await typeLikeHuman(messageBox, mensagemFinal);
 
       const sendButton = page.getByLabel('Enviar');
+      await sendButton.waitFor({ timeout: 5000 });
       await sendButton.click();
 
       const contatoRef = db.collection('contatos').doc(contato.id);
@@ -123,6 +127,14 @@ async function executarCampanha(campanha) {
   } catch (error) {
     console.error(`[WORKER] Erro ao executar campanha ID: ${campanha.id}.`, error);
     await campanhaRef.update({ status: 'erro', erroMsg: error.message });
+
+    try {
+      const screenshotPath = `/tmp/erro-${campanha.id}.png`;
+      await context?.pages?.()[0]?.screenshot({ path: screenshotPath });
+      console.log(`[DEBUG] Screenshot salvo em ${screenshotPath}`);
+    } catch (screenshotError) {
+      console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
+    }
   } finally {
     if (context) {
       await context.close();
@@ -147,13 +159,14 @@ app.post('/start-campaign', async (req, res) => {
   }
   console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
   res.status(202).send({ message: 'Campanha aceita. A execução começará em segundo plano.' });
+
   try {
     const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
     if (!campaignDoc.exists) {
       throw new Error('Campanha não encontrada no banco de dados.');
     }
     const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
-    executarCampanha(campanha);
+    setImmediate(() => executarCampanha(campanha));
   } catch (error) {
     console.error(`[API] Erro ao buscar ou iniciar a campanha ${campaignId}:`, error);
   }

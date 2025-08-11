@@ -1,7 +1,7 @@
-# Usar imagem oficial do Node.js com base Debian Bullseye
+# ✅ Usar imagem oficial do Node.js baseada no Debian Bullseye
 FROM node:18-bullseye
 
-# Instalar dependências do Chromium necessárias para Playwright
+# 🧱 Instalar dependências do Chromium necessárias para Playwright
 RUN apt-get update && apt-get install -y \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -27,24 +27,26 @@ RUN apt-get update && apt-get install -y \
     libdbus-glib-1-2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Criar diretório da aplicação
+# 📁 Criar diretório da aplicação
 WORKDIR /app
 
-# Copiar package.json e instalar dependências
+# 📦 Copiar package.json e instalar dependências
 COPY package*.json ./
 RUN npm install
 
-# Instalar apenas o Chromium do Playwright
-RUN npx playwright install chromium
+# 🧭 Instalar navegadores do Playwright com dependências
+RUN npx playwright install --with-deps
 
-# Copiar o restante do código
+# 📄 Copiar o restante do código
 COPY . .
 
-# Definir variável de ambiente
+# 🌍 Variáveis de ambiente para Playwright
 ENV NODE_ENV=production
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=false
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 
-# Expor a porta usada pela API
+# 🚪 Expor a porta usada pela API
 EXPOSE 10000
 
-# Comando de inicialização
+# 🚀 Comando de inicialização
 CMD ["npm", "start"]
