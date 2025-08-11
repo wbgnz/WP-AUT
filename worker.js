@@ -2,26 +2,24 @@ const { chromium } = require('playwright');
 const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
+const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO ---
 let serviceAccount;
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.log('[INFO] Lendo credenciais do Firebase da variável de ambiente.');
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 } else {
-  console.log('[INFO] Lendo credenciais do Firebase do arquivo local.');
   serviceAccount = require('./firebase-service-account.json');
 }
 
-// A CORREÇÃO ESTÁ AQUI: Usamos um caminho local e temporário para a sessão.
-const USER_DATA_DIR = './whatsapp_session_data';
+const USER_DATA_DIR = '/data/whatsapp_session_data'; 
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
-const db = admin.firestore();
+const db = getFirestore();
 
-// --- FUNÇÕES DO ROBÔ (Humanização) ---
+// --- FUNÇÕES DO ROBÔ (COMPLETAS) ---
 function delay(minSeconds, maxSeconds) { 
     const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000; 
     console.log(`[HUMANIZADOR] Pausa de ${Math.round(ms/1000)} segundos...`); 
@@ -53,7 +51,7 @@ async function handlePopups(page) {
     console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.'); 
 }
 
-// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA ---
+// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA (COMPLETA) ---
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
   const campanhaRef = db.collection('campanhas').doc(campanha.id);
@@ -107,11 +105,10 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- CONFIGURAÇÃO DO SERVIDOR DE API ---
+// --- CONFIGURAÇÃO DO SERVIDOR DE API (COMPLETA) ---
 const app = express();
 app.use(cors()); 
 app.use(express.json());
-
 const PORT = process.env.PORT || 10000;
 
 app.get('/', (req, res) => {
@@ -125,7 +122,6 @@ app.post('/start-campaign', async (req, res) => {
   }
   console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
   res.status(202).send({ message: 'Campanha aceite. A execução começará em segundo plano.' });
-
   try {
     const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
     if (!campaignDoc.exists) {
