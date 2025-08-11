@@ -102,7 +102,9 @@ async function executarCampanha(campanha) {
 // --- O AGENDADOR (CRON JOB) ---
 console.log('[WORKER] Worker iniciado. Verificando campanhas a cada minuto...');
 cron.schedule('* * * * *', async () => {
-  console.log(`[CRON][${new Date().toLocaleTimeString('pt-BR')}] Verificando campanhas agendadas...`);
+  // A CORREÇÃO ESTÁ AQUI: Formatamos a data para o fuso horário de São Paulo.
+  const options = { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' };
+  console.log(`[CRON][${new Date().toLocaleTimeString('pt-BR', options)}] Verificando campanhas agendadas...`);
   
   const agora = new Date();
   const q = query(collection(db, 'campanhas'), where('status', '==', 'pendente'), where('agendamento', '<=', agora), orderBy('agendamento', 'asc'), limit(1));
