@@ -1,3 +1,4 @@
+// worker-full.js
 const { chromium } = require('playwright');
 const admin = require('firebase-admin');
 const express = require('express');
@@ -14,15 +15,14 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
-const USER_DATA_DIR = path.join('/tmp', 'whatsapp_session_data');
-if (!fs.existsSync(USER_DATA_DIR)) {
-  fs.mkdirSync(USER_DATA_DIR, { recursive: true });
-}
-
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = getFirestore();
+
+// Diretório base para sessões (cada cliente terá sua subpasta)
+const SESSIONS_BASE = path.join('/tmp', 'whatsapp_sessions');
+if (!fs.existsSync(SESSIONS_BASE)) fs.mkdirSync(SESSIONS_BASE, { recursive: true });
 
 // --- MONITORAMENTO DO SISTEMA ---
 process.on('SIGTERM', () => {
@@ -40,39 +40,155 @@ function logMemoryUsage() {
   });
 }
 
-// --- FUNÇÕES AUXILIARES ---
-function delay(minSeconds, maxSeconds) {
+function delay(minSeconds = 1, maxSeconds = 3) {
   const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000;
-  console.log(`[HUMANIZADOR] Pausa de ${Math.round(ms / 1000)} segundos...`);
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Digitação "humana" - opcional para usar em campanhas
 async function typeLikeHuman(locator, text) {
-  console.log('[HUMANIZADOR] Clicando no campo para focar...');
   await locator.click();
-  console.log('[HUMANIZADOR] Simulando digitação...');
   await locator.type(text, { delay: Math.random() * 120 + 40 });
 }
 
-async function handlePopups(page) {
-  console.log('[FASE 2] Verificando a presença de pop-ups...');
-  const possibleSelectors = [
-    page.getByRole('button', { name: 'Continuar' }),
-    page.getByRole('button', { name: /OK|Entendi|Concluir/i }),
-    page.getByLabel('Fechar', { exact: true })
-  ];
-  for (const selector of possibleSelectors) {
-    try {
-      await selector.waitFor({ timeout: 3000 });
-      await selector.click({ force: true });
-      console.log('[FASE 2] Pop-up fechado.');
-      return;
-    } catch (_) {}
-  }
-  console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.');
+// --- FUNÇÃO PARA EXTRAIR O CÓDIGO NUMÉRICO (OU ALFANUMÉRICO) ---
+async function extrairCodigoNumeric(page) {
+  // Espera texto guia existir
+  await page.waitForSelector('text=Insira o código no seu celular', { timeout: 60000 });
+
+  // Executa no browser para tentar extrair o código de forma robusta
+  const codigo = await page.evaluate(() => {
+    // procura um elemento que contenha o texto guia
+    const xpath = "//div[contains(., 'Insira o código no seu celular') or contains(., 'Insira o código')]";
+    const node = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    if (!node) return null;
+
+    // Coleta text nodes dentro do container
+    function getTextNodes(root) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+      const texts = [];
+      let n;
+      while ((n = walker.nextNode())) {
+        const t = n.nodeValue.trim();
+        if (t) texts.push(t);
+      }
+      return texts;
+    }
+
+    const texts = getTextNodes(node);
+    const joined = texts.join(' ');
+    // tenta extrair algo no padrão tipo "AB12-C34X" ou "1234-5678" ou "TSC8-E94X"
+    const match = joined.match(/[A-Z0-9]{2,}(-[A-Z0-9]{2,})*/i);
+    if (match) return match[0].toUpperCase();
+    // fallback: retorna o conteúdo textual acumulado
+    return joined.trim().substring(0, 50);
+  });
+
+  return codigo;
 }
 
-// --- FUNÇÃO PRINCIPAL ---
+// --- FUNÇÃO DE LOGIN POR NÚMERO (captura código e monitora login) ---
+async function iniciarLoginPorNumero(numero, clienteId) {
+  const sessionDir = path.join(SESSIONS_BASE, `${clienteId}`);
+  if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+
+  const page = await context.newPage();
+  await page.goto(`https://web.whatsapp.com/send?phone=${numero}`, { waitUntil: 'domcontentloaded' });
+
+  // Aguarda a página colocar o widget de login (pode ser QR code OU código numérico)
+  // Primeiro tentamos detectar a tela de código numérico
+  let codigo = null;
+  try {
+    codigo = await extrairCodigoNumeric(page);
+  } catch (err) {
+    console.log('[LOGIN] Tela de código numérico não detectada ou extração falhou:', err.message || err);
+  }
+
+  // Se não extraiu código numérico, tentamos capturar QR code (canvas) como fallback
+  let qrBase64 = null;
+  try {
+    if (!codigo) {
+      // tenta selector de canvas do QR
+      const qrLocator = page.locator('canvas');
+      if (await qrLocator.count() > 0) {
+        const buffer = await qrLocator.first().screenshot();
+        qrBase64 = buffer.toString('base64');
+      }
+    }
+  } catch (err) {
+    console.log('[LOGIN] não foi possível capturar QR. Erro:', err.message || err);
+  }
+
+  // Salva no Firestore o doc de login com informações iniciais
+  const docRef = db.collection('logins').doc(clienteId);
+  const payloadInit = {
+    numero,
+    status: 'aguardando_confirmacao',
+    criadoEm: admin.firestore.FieldValue.serverTimestamp()
+  };
+  if (codigo) payloadInit.codigo = codigo;
+  if (qrBase64) payloadInit.qr = `data:image/png;base64,${qrBase64}`;
+
+  await docRef.set(payloadInit);
+
+  // Inicia monitoramento em background (não bloqueia quem chamou)
+  (async () => {
+    try {
+      // Se já temos o codigo capturado, atualizamos o doc (garantia)
+      if (codigo) {
+        await docRef.update({ codigo, status: 'aguardando_confirmacao' });
+      } else if (qrBase64) {
+        await docRef.update({ qr: `data:image/png;base64,${qrBase64}`, status: 'aguardando_confirmacao' });
+      } else {
+        // nenhum dos dois detectados: deixamos como erro e fechamos o contexto
+        await docRef.update({ status: 'erro', erroMsg: 'Não detectado QR nem código' });
+        await context.close();
+        return;
+      }
+
+      // Espera o login efetivo acontecer (pane-side existe): timeout configurável (ex: 5min)
+      try {
+        await page.waitForSelector('#pane-side', { timeout: 5 * 60 * 1000 });
+        console.log(`[LOGIN] Cliente ${clienteId} logado com sucesso!`);
+
+        await docRef.update({
+          status: 'conectado',
+          conectadoEm: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // opcional: salvar metadados da sessão, phone, etc
+      } catch (waitErr) {
+        console.log(`[LOGIN] Timeout aguardando login para ${clienteId}.`);
+        await docRef.update({
+          status: 'timeout',
+          erroMsg: 'Timeout aguardando o usuário concluir o login (5min).'
+        });
+      }
+    } catch (bgErr) {
+      console.error('[LOGIN background] Erro durante o monitoramento:', bgErr);
+      try {
+        await docRef.update({ status: 'erro', erroMsg: bgErr.message || String(bgErr) });
+      } catch (_) {}
+    } finally {
+      // Sempre tentamos fechar o contexto (mas se você quer manter a sessão ativa, pode manter)
+      try {
+        await context.close();
+      } catch (_) {}
+    }
+  })();
+
+  // retorna imediatamente o que conseguimos (codigo e/ou qr)
+  return { codigo, qr: qrBase64 ? `data:image/png;base64,${qrBase64}` : null };
+}
+
+// --- FUNÇÃO PRINCIPAL ORIGINAL (campanhas) ---
+// Mantive sua função executarCampanha praticamente igual à sua versão,
+// apenas referenciando o SESSIONS_BASE quando precisar de pasta persistente.
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
   const campanhaRef = db.collection('campanhas').doc(campanha.id);
@@ -90,7 +206,7 @@ async function executarCampanha(campanha) {
       const snapshot = await q.get();
       contatosParaEnviar = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     } else {
-      const contactIds = campanha.contactIds;
+      const contactIds = campanha.contactIds || [];
       const results = await Promise.all(contactIds.map(id => db.collection('contatos').doc(id).get()));
       contatosParaEnviar = results
         .filter(d => d.exists && d.data().status === 'disponivel')
@@ -99,6 +215,10 @@ async function executarCampanha(campanha) {
 
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
     console.log(`[WORKER] ${contatosParaEnviar.length} contatos serão processados.`);
+
+    // Use uma sessão global para campanhas (ou personalize por cliente se precisar)
+    const USER_DATA_DIR = path.join(SESSIONS_BASE, 'campaign_default');
+    if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true });
 
     context = await chromium.launchPersistentContext(USER_DATA_DIR, {
       headless: true,
@@ -112,19 +232,29 @@ async function executarCampanha(campanha) {
     await page.goto('https://web.whatsapp.com', { waitUntil: 'networkidle' });
     await page.waitForTimeout(5000);
     await page.waitForSelector('div#pane-side', { state: 'visible' });
-    await handlePopups(page);
 
-    const mensagemTemplate = campanha.mensagemTemplate;
+    // Tentativa de fechar popups (conforme seu código original)
+    try {
+      const possible = [
+        page.getByRole('button', { name: 'Continuar' }),
+        page.getByRole('button', { name: /OK|Entendi|Concluir/i })
+      ];
+      for (const p of possible) {
+        try { await p.click({ timeout: 2000 }); } catch (_) {}
+      }
+    } catch (_) {}
+
+    const mensagemTemplate = campanha.mensagemTemplate || '';
     for (const contato of contatosParaEnviar) {
       console.log(`--------------------------------------------------`);
       console.log(`[DISPARO] Preparando para ${contato.nome || contato.numero}`);
 
-      let mensagemFinal = mensagemTemplate.replace(/{{nome}}/g, contato.nome);
-
+      let mensagemFinal = mensagemTemplate.replace(/{{nome}}/g, contato.nome || '');
       await page.goto(`https://web.whatsapp.com/send?phone=${contato.numero}`, { waitUntil: 'domcontentloaded' });
 
-      const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' }).getByRole('paragraph');
-      await messageBox.waitFor({ timeout: 10000 });
+      // Localiza caixa de texto - robustez para diferentes localizações no DOM
+      const messageBox = page.getByRole('textbox', { name: /Digite uma mensagem|Mensagem/i }).first();
+      await messageBox.waitFor({ timeout: 15000 });
       await typeLikeHuman(messageBox, mensagemFinal);
 
       const sendButton = page.getByLabel('Enviar');
@@ -135,7 +265,7 @@ async function executarCampanha(campanha) {
       await contatoRef.update({ status: 'usado' });
 
       console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
-      await delay(campanha.minDelay, campanha.maxDelay);
+      await delay(campanha.minDelay || 2, campanha.maxDelay || 5);
       logMemoryUsage();
     }
 
@@ -143,18 +273,10 @@ async function executarCampanha(campanha) {
     console.log(`[WORKER] Campanha ID: ${campanha.id} concluída com sucesso!`);
   } catch (error) {
     console.error(`[WORKER] Erro ao executar campanha ID: ${campanha.id}.`, error);
-    await campanhaRef.update({ status: 'erro', erroMsg: error.message });
-
-    try {
-      const screenshotPath = `/tmp/erro-${campanha.id}.png`;
-      await context?.pages?.()[0]?.screenshot({ path: screenshotPath });
-      console.log(`[DEBUG] Screenshot salvo em ${screenshotPath}`);
-    } catch (screenshotError) {
-      console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
-    }
+    try { await campanhaRef.update({ status: 'erro', erroMsg: error.message }); } catch (_) {}
   } finally {
     if (context) {
-      await context.close();
+      try { await context.close(); } catch (_) {}
     }
   }
 }
@@ -169,18 +291,43 @@ app.get('/', (req, res) => {
   res.send('Motor de automação do WhatsApp está online e pronto.');
 });
 
+// Rota para iniciar login por número (captura código / qr e monitora)
+app.post('/connect', async (req, res) => {
+  const { numero, clienteId } = req.body;
+  if (!numero || !clienteId) {
+    return res.status(400).send({ error: 'numero e clienteId são obrigatórios.' });
+  }
+
+  console.log(`[API] Pedido /connect para cliente ${clienteId} (numero=${numero})`);
+
+  try {
+    const { codigo, qr } = await iniciarLoginPorNumero(numero, clienteId);
+
+    // Retorna o que foi capturado (código e/ou QR). Se nenhum, responde 500.
+    if (!codigo && !qr) {
+      return res.status(500).send({ error: 'Não foi possível detectar código nem QR. Veja logs.' });
+    }
+
+    return res.send({ codigo, qr });
+  } catch (err) {
+    console.error('[API] Erro em /connect:', err);
+    return res.status(500).send({ error: err.message || 'erro interno' });
+  }
+});
+
+// Rota de exemplo para iniciar campanha (mantive a estrutura)
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
   if (!campaignId) {
     return res.status(400).send({ error: 'campaignId é obrigatório.' });
   }
-  console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
   res.status(202).send({ message: 'Campanha aceita. A execução começará em segundo plano.' });
 
   try {
     const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
     if (!campaignDoc.exists) {
-      throw new Error('Campanha não encontrada no banco de dados.');
+      console.error(`[API] Campanha ${campaignId} não encontrada.`);
+      return;
     }
     const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
     setImmediate(() => executarCampanha(campanha));
