@@ -13,12 +13,12 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
-const USER_DATA_DIR = '/var/data/whatsapp_session_data';
+// A CORREÇÃO ESTÁ AQUI: Usamos um caminho local e temporário para a sessão.
+const USER_DATA_DIR = './whatsapp_session_data';
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
-// A CORREÇÃO COMEÇA AQUI: Usamos a sintaxe correta do Admin SDK
 const db = admin.firestore();
 
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
