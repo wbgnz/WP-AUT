@@ -1,7 +1,6 @@
 const { chromium } = require('playwright');
 const admin = require('firebase-admin');
-const cron = require('node-cron');
-// A CORREÇÃO ESTÁ AQUI: Importamos tudo diretamente do 'firebase-admin/firestore'.
+const cron = 'node-cron';
 const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO INTELIGENTE ---
@@ -22,7 +21,6 @@ const USER_DATA_DIR = '/var/data/whatsapp_session_data'; // Caminho recomendado 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
-// Usamos a função importada para obter a referência do banco de dados.
 const db = getFirestore();
 
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
@@ -106,6 +104,7 @@ cron.schedule('* * * * *', async () => {
   console.log(`[CRON][${new Date().toLocaleTimeString('pt-BR')}] Verificando campanhas agendadas...`);
   
   const agora = new Date();
+  // A CORREÇÃO ESTÁ AQUI: 'agendamento' em vez de 'agamento'
   const q = query(collection(db, 'campanhas'), where('status', '==', 'pendente'), where('agendamento', '<=', agora), orderBy('agendamento', 'asc'), limit(1));
   
   const snapshot = await getDocs(q);
