@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const admin = require('firebase-admin');
-const cron = 'node-cron';
+// A CORREÇÃO ESTÁ AQUI: Importamos o módulo corretamente.
+const cron = require('node-cron');
 const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO INTELIGENTE ---
@@ -104,7 +105,6 @@ cron.schedule('* * * * *', async () => {
   console.log(`[CRON][${new Date().toLocaleTimeString('pt-BR')}] Verificando campanhas agendadas...`);
   
   const agora = new Date();
-  // A CORREÇÃO ESTÁ AQUI: 'agendamento' em vez de 'agamento'
   const q = query(collection(db, 'campanhas'), where('status', '==', 'pendente'), where('agendamento', '<=', agora), orderBy('agendamento', 'asc'), limit(1));
   
   const snapshot = await getDocs(q);
