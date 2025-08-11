@@ -1,8 +1,7 @@
 const { chromium } = require('playwright');
 const admin = require('firebase-admin');
 const express = require('express');
-const cors = require('cors'); // Importa a biblioteca CORS
-const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc } = require('firebase-admin/firestore');
+const cors = require('cors');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO ---
 let serviceAccount;
@@ -19,7 +18,8 @@ const USER_DATA_DIR = '/var/data/whatsapp_session_data';
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
-const db = getFirestore();
+// A CORREÇÃO COMEÇA AQUI: Usamos a sintaxe correta do Admin SDK
+const db = admin.firestore();
 
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
 function delay(minSeconds, maxSeconds) { 
@@ -56,20 +56,20 @@ async function handlePopups(page) {
 // --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA ---
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
-  const campanhaRef = doc(db, 'campanhas', campanha.id);
+  const campanhaRef = db.collection('campanhas').doc(campanha.id);
   let context;
   try {
-    await updateDoc(campanhaRef, { status: 'rodando' });
+    await campanhaRef.update({ status: 'rodando' });
     let contatosParaEnviar = [];
     if (campanha.tipo === 'quantity') {
-      const q = query(collection(db, 'contatos'), where('status', '==', 'disponivel'), orderBy('criadoEm', 'asc'), limit(campanha.totalContatos));
-      const snapshot = await getDocs(q);
+      const q = db.collection('contatos').where('status', '==', 'disponivel').orderBy('criadoEm', 'asc').limit(campanha.totalContatos);
+      const snapshot = await q.get();
       contatosParaEnviar = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     } else {
       const contactIds = campanha.contactIds;
-      const promises = contactIds.map(id => getDoc(doc(db, 'contatos', id)));
+      const promises = contactIds.map(id => db.collection('contatos').doc(id).get());
       const results = await Promise.all(promises);
-      contatosParaEnviar = results.filter(d => d.exists() && d.data().status === 'disponivel').map(d => ({ id: d.id, ...d.data() }));
+      contatosParaEnviar = results.filter(d => d.exists && d.data().status === 'disponivel').map(d => ({ id: d.id, ...d.data() }));
     }
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
     console.log(`[WORKER] ${contatosParaEnviar.length} contatos serão processados.`);
@@ -90,16 +90,16 @@ async function executarCampanha(campanha) {
       await typeLikeHuman(messageBox, mensagemFinal);
       const sendButton = page.getByLabel('Enviar');
       await sendButton.click();
-      const contatoRef = doc(db, 'contatos', contato.id);
-      await updateDoc(contatoRef, { status: 'usado' });
+      const contatoRef = db.collection('contatos').doc(contato.id);
+      await contatoRef.update({ status: 'usado' });
       console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
       await delay(campanha.minDelay, campanha.maxDelay);
     }
-    await updateDoc(campanhaRef, { status: 'concluida' });
+    await campanhaRef.update({ status: 'concluida' });
     console.log(`[WORKER] Campanha ID: ${campanha.id} concluída com sucesso!`);
   } catch (error) {
     console.error(`[WORKER] Erro ao executar campanha ID: ${campanha.id}.`, error);
-    await updateDoc(campanhaRef, { status: 'erro', erroMsg: error.message });
+    await campanhaRef.update({ status: 'erro', erroMsg: error.message });
   } finally {
     if (context) {
       await context.close();
@@ -109,42 +109,30 @@ async function executarCampanha(campanha) {
 
 // --- CONFIGURAÇÃO DO SERVIDOR DE API ---
 const app = express();
-
-// A CORREÇÃO ESTÁ AQUI: Habilitamos o CORS para todas as origens.
-// Isto diz ao motor para aceitar chamadas do seu painel na Vercel.
 app.use(cors()); 
-
 app.use(express.json());
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 10000;
 
-// Endpoint de verificação
 app.get('/', (req, res) => {
   res.send('Motor de automação do WhatsApp está online e pronto.');
 });
 
-// Endpoint que o painel irá chamar para iniciar uma campanha
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
-
   if (!campaignId) {
     return res.status(400).send({ error: 'campaignId é obrigatório.' });
   }
-
   console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
-
   res.status(202).send({ message: 'Campanha aceite. A execução começará em segundo plano.' });
 
   try {
-    const campaignDoc = await getDoc(doc(db, 'campanhas', campaignId));
-    if (!campaignDoc.exists()) {
+    const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
+    if (!campaignDoc.exists) {
       throw new Error('Campanha não encontrada no banco de dados.');
     }
     const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
-    
-    // Executa a campanha em segundo plano, sem esperar pela conclusão
     executarCampanha(campanha);
-
   } catch (error) {
     console.error(`[API] Erro ao buscar ou iniciar a campanha ${campaignId}:`, error);
   }
