@@ -101,17 +101,19 @@ async function executarCampanha(campanha) {
 // --- O AGENDADOR (CRON JOB) ---
 console.log('[WORKER] Worker iniciado. Verificando campanhas a cada minuto...');
 cron.schedule('* * * * *', async () => {
-  const options = { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' };
   const agora = new Date();
-  console.log(`[CRON][${agora.toLocaleTimeString('pt-BR', options)}] Verificando campanhas agendadas...`);
+  const options = { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' };
+  
+  console.log(`[CRON][${agora.toLocaleTimeString('pt-BR', options)}] Verificando... Server Time (UTC): ${agora.toISOString()}`);
   
   const q = query(collection(db, 'campanhas'), where('status', '==', 'pendente'), where('agendamento', '<=', agora), orderBy('agendamento', 'asc'), limit(1));
   
   const snapshot = await getDocs(q);
+
+  // --- LÓGICA DE DEPURAÇÃO ADICIONADA ---
+  console.log(`[DEBUG] Documentos prontos encontrados pela query principal: ${snapshot.size}`);
+  
   if (snapshot.empty) {
-    console.log('[CRON] Nenhuma campanha pendente encontrada para AGORA.');
-    
-    // --- LÓGICA DE DEPURAÇÃO ADICIONADA ---
     console.log('[DEBUG] A verificar a próxima campanha agendada no futuro...');
     const debugQuery = query(
         collection(db, 'campanhas'), 
@@ -124,16 +126,14 @@ cron.schedule('* * * * *', async () => {
         const proximaCampanha = debugSnapshot.docs[0].data();
         const dataAgendada = proximaCampanha.agendamento.toDate();
         console.log(`[DEBUG] Próxima campanha encontrada: Agendada para ${dataAgendada.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
-        console.log(`[DEBUG] Horário atual do servidor (convertido): ${agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
     } else {
         console.log('[DEBUG] Nenhuma campanha pendente no futuro foi encontrada.');
     }
     // --- FIM DA LÓGICA DE DEPURAÇÃO ---
-
     return;
   }
 
-  console.log(`[CRON] 1 campanha encontrada para execução.`);
+  console.log(`[CRON] ${snapshot.size} campanha(s) encontrada(s) para execução.`);
   const campanhaParaExecutar = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
   
   await executarCampanha(campanhaParaExecutar);
