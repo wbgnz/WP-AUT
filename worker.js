@@ -12,6 +12,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
+// Este caminho agora é uma subpasta dentro do nosso disco único em /data
 const USER_DATA_DIR = '/data/whatsapp_session_data'; 
 
 admin.initializeApp({

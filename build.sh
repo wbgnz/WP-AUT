@@ -5,5 +5,8 @@ set -o errexit
 # 1. Instala as dependências do package.json
 npm install
 
-# 2. Instala os navegadores do Playwright da forma correta para o Render
+# 2. Define o caminho para o cache do Playwright dentro do nosso disco persistente
+export PLAYWRIGHT_BROWSERS_PATH=/data/playwright-cache
+
+# 3. Instala os navegadores no caminho especificado
 npx playwright install
