@@ -2,23 +2,27 @@
 # Sair imediatamente se um comando falhar
 set -e
 
-echo "--- Script de Arranque V3 ---"
-
 # Define o caminho para o cache do Playwright, lendo da variável de ambiente
 export PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-/data/playwright-cache}
-echo "Caminho para navegadores definido como: $PLAYWRIGHT_BROWSERS_PATH"
 
-echo "A garantir que o diretório de cache existe..."
-# Cria o diretório se não existir (medida de segurança)
-mkdir -p $PLAYWRIGHT_BROWSERS_PATH
+echo "--- Script de Arranque Inteligente V4 ---"
+echo "A usar o caminho para navegadores: $PLAYWRIGHT_BROWSERS_PATH"
 
-echo "A tentar instalar/verificar o chromium..."
-# A instalação do Playwright é inteligente e não descarrega se o navegador já existir
-npx playwright install --with-deps chromium
+# Verifica se a pasta de cache existe e tem conteúdo
+# O comando `find ... -type f | wc -l` conta o número de ficheiros dentro da pasta
+if [ -d "$PLAYWRIGHT_BROWSERS_PATH" ] && [ $(find "$PLAYWRIGHT_BROWSERS_PATH" -type f | wc -l) -gt 5 ]; then
+  echo "Cache de navegadores encontrado com conteúdo. A saltar a instalação."
+else
+  echo "Cache de navegadores não encontrado ou vazio. A instalar chromium..."
+  # Cria o diretório se não existir (medida de segurança)
+  mkdir -p $PLAYWRIGHT_BROWSERS_PATH
+  # Executa o comando de instalação, apenas para o chromium
+  npx playwright install --with-deps chromium
+  echo "Instalação do chromium concluída."
+fi
 
-echo "Verificação/Instalação do Playwright concluída."
-echo "Listando conteúdo do diretório de cache para depuração:"
-# Este comando irá mostrar-nos nos logs exatamente o que foi instalado
+# Lista o conteúdo do diretório para depuração
+echo "Listando conteúdo do diretório de cache:"
 ls -la $PLAYWRIGHT_BROWSERS_PATH
 
 # Finalmente, inicia o nosso motor
