@@ -124,6 +124,7 @@ async function handleConnectionLogin(connectionId) {
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
     const TIMEOUT_MS = 120000; // 2 minutos
     const startTime = Date.now();
+    let hasLoggedHTML = false; // Flag para registar o HTML apenas uma vez
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
@@ -133,7 +134,10 @@ async function handleConnectionLogin(connectionId) {
         });
         const page = context.pages()[0] || await context.newPage();
         
-        await page.setViewportSize({ width: 1280, height: 800 });
+        // MELHORIA: Simula um navegador e ecrã de computador comum
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
+        
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
         console.log(`[QR] A procurar por QR Code ou sessão ativa...`);
@@ -154,7 +158,7 @@ async function handleConnectionLogin(connectionId) {
 
             try {
                 const qrLocator = page.locator('div[data-ref]');
-                await qrLocator.waitFor({ state: 'visible', timeout: 10000 });
+                await qrLocator.waitFor({ state: 'visible', timeout: 5000 });
                 const qrCodeData = await qrLocator.getAttribute('data-ref');
 
                 if (qrCodeData && qrCodeData !== lastQrCode) {
@@ -168,7 +172,16 @@ async function handleConnectionLogin(connectionId) {
             } catch (e) {
                 console.log(`[QR] QR code não visível, aguardando...`);
             }
-            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // MELHORIA: Se após 45 segundos ainda não encontrou o QR, regista o HTML
+            if (!hasLoggedHTML && Date.now() - startTime > 45000 && !lastQrCode) {
+                console.log('[DEBUG] Nenhum QR code encontrado após 45s. A registar o HTML da página...');
+                const pageContent = await page.content();
+                console.log(pageContent);
+                hasLoggedHTML = true;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
         throw new Error('Timeout de 2 minutos atingido.');
         
@@ -224,7 +237,6 @@ app.post('/connections', async (req, res) => {
       criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    // A CORREÇÃO ESTÁ AQUI: Usamos o ID do documento que acabámos de criar.
     handleConnectionLogin(connectionRef.id);
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
