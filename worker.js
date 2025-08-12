@@ -8,6 +8,7 @@ const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 // --- CONFIGURAÇÕES ---
 const IS_HEADLESS = process.env.NODE_ENV === 'production'; 
 const SESSIONS_BASE_PATH = process.env.NODE_ENV === 'production' ? '/data/sessions' : './whatsapp_session_data';
+const SCREENSHOTS_PATH = process.env.NODE_ENV === 'production' ? '/data/screenshots' : './screenshots';
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
@@ -91,6 +92,7 @@ async function executarCampanha(campanha) {
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
     await page.goto('https://web.whatsapp.com');
+    // CORREÇÃO: Espera pelo sinal de login mais fiável
     await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
     await handlePopups(page);
     const mensagemTemplate = campanha.mensagemTemplate;
@@ -126,8 +128,7 @@ async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
-    // A CORREÇÃO ESTÁ AQUI: Timeout aumentado para 3 minutos (180000 ms)
-    const TIMEOUT_MS = 180000; 
+    const TIMEOUT_MS = 120000; // 2 minutos
     const startTime = Date.now();
 
     try {
@@ -148,6 +149,7 @@ async function handleConnectionLogin(connectionId) {
 
         while (Date.now() - startTime < TIMEOUT_MS) {
             const qrLocator = page.locator('div[data-ref]');
+            // CORREÇÃO: Usamos um seletor mais fiável para a barra de pesquisa.
             const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
 
             try {
@@ -183,7 +185,7 @@ async function handleConnectionLogin(connectionId) {
             
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
-        throw new Error('Timeout de 3 minutos atingido.');
+        throw new Error('Timeout de 2 minutos atingido.');
         
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
@@ -191,7 +193,7 @@ async function handleConnectionLogin(connectionId) {
         try {
             await connectionRef.update({ 
                 status: 'desconectado', 
-                error: 'Timeout: QR Code não foi escaneado em 3 minutos.',
+                error: 'Timeout: QR Code não foi escaneado em 2 minutos.',
                 qrCode: FieldValue.delete()
             });
         } catch (updateError) {
