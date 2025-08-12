@@ -310,4 +310,68 @@ async function handleConnectionLogin(connectionId) {
   } finally {
     if (context) {
       try { await context.close(); } catch(e){ }
-      console.log(`[QR] cont
+      console.log(`[QR] contexto fechado para ${connectionId}`);
+    }
+  }
+}
+
+// --- SERVIDOR HTTP / API ---
+const app = express();
+app.use(cors());
+app.use(express.json());
+const PORT = process.env.PORT || 10000;
+
+app.get('/', (req, res) => {
+  res.send('Motor de automação do WhatsApp está online e pronto.');
+});
+
+app.post('/start-campaign', async (req, res) => {
+  const { campaignId } = req.body;
+  if (!campaignId) return res.status(400).send({ error: 'campaignId é obrigatório.' });
+  console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
+  res.status(202).send({ message: 'Campanha aceite.' });
+
+  try {
+    const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
+    if (!campaignDoc.exists) throw new Error('Campanha não encontrada.');
+    const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
+    // executar async para não bloquear resposta HTTP
+    executarCampanha(campanha).catch(err => console.error('[API] executarCampanha erro async:', err.message || err));
+  } catch (error) {
+    console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error.message || error);
+  }
+});
+
+app.post('/connections', async (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
+  try {
+    const connectionRef = await db.collection('conexoes').add({
+      name,
+      status: 'generating_qrcode',
+      criadoEm: FieldValue.serverTimestamp()
+    });
+    res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
+    // iniciar login async (gera QR e atualiza Firestore)
+    handleConnectionLogin(connectionRef.id).catch(err => console.error('[API] handleConnectionLogin async erro:', err.message || err));
+  } catch (error) {
+    console.error('[API] Erro ao criar conexão:', error.message || error);
+    res.status(500).send({ error: 'Falha ao criar conexão.' });
+  }
+});
+
+app.get('/connections/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const connectionDoc = await db.collection('conexoes').doc(id).get();
+    if (!connectionDoc.exists) return res.status(404).send({ error: 'Conexão não encontrada.' });
+    res.status(200).send({ id: connectionDoc.id, ...connectionDoc.data() });
+  } catch (error) {
+    console.error(`[API] Erro ao buscar status da conexão ${id}:`, error.message || error);
+    res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
+});
