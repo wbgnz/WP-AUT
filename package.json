@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "worker.js",
   "scripts": {
-    "start": "node worker.js",
-    "build": "bash build.sh",
+    "start": "bash start.sh",
+    "build": "npm install",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
