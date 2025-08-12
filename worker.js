@@ -83,7 +83,12 @@ async function executarCampanha(campanha) {
     }
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
     
-    context = await chromium.launchPersistentContext(sessionPath, { headless: IS_HEADLESS, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    context = await chromium.launchPersistentContext(sessionPath, { 
+        headless: IS_HEADLESS, 
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        viewport: { width: 1440, height: 900 }
+    });
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
     await page.goto('https://web.whatsapp.com');
@@ -124,19 +129,18 @@ async function handleConnectionLogin(connectionId) {
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
     const TIMEOUT_MS = 120000; // 2 minutos
     const startTime = Date.now();
-    let hasLoggedHTML = false; // Flag para registar o HTML apenas uma vez
+    let hasLoggedHTML = false;
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
+        // A CORREÇÃO ESTÁ AQUI: As opções são passadas na criação do contexto.
         context = await chromium.launchPersistentContext(sessionPath, { 
             headless: IS_HEADLESS,
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            viewport: { width: 1440, height: 900 }
         });
         const page = context.pages()[0] || await context.newPage();
-        
-        // MELHORIA: Simula um navegador e ecrã de computador comum
-        await page.setViewportSize({ width: 1440, height: 900 });
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
         
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
@@ -173,7 +177,6 @@ async function handleConnectionLogin(connectionId) {
                 console.log(`[QR] QR code não visível, aguardando...`);
             }
 
-            // MELHORIA: Se após 45 segundos ainda não encontrou o QR, regista o HTML
             if (!hasLoggedHTML && Date.now() - startTime > 45000 && !lastQrCode) {
                 console.log('[DEBUG] Nenhum QR code encontrado após 45s. A registar o HTML da página...');
                 const pageContent = await page.content();
