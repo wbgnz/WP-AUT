@@ -92,7 +92,7 @@ async function executarCampanha(campanha) {
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
     await page.goto('https://web.whatsapp.com');
-    await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
+    await page.locator('div#pane-side').waitFor({ state: 'visible' }); // Espera pelo painel de conversas
     await handlePopups(page);
     const mensagemTemplate = campanha.mensagemTemplate;
 
@@ -147,54 +147,49 @@ async function handleConnectionLogin(connectionId) {
         let lastQrCode = null;
 
         while (Date.now() - startTime < TIMEOUT_MS) {
-            try {
-                // A CORREÇÃO ESTÁ AQUI: Usamos um seletor mais fiável para a barra de pesquisa.
-                await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible', timeout: 1000 });
-                console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
-                await connectionRef.update({
-                    status: 'conectado',
-                    qrCode: FieldValue.delete(),
-                });
-                if (context) await context.close();
-                return;
-            } catch (e) { /* Login ainda não aconteceu, o que é normal. Continue... */ }
+            // A CORREÇÃO ESTÁ AQUI: Usamos Promise.race para esperar pelo primeiro evento que acontecer
+            const qrLocator = page.locator('div[data-ref]');
+            const loggedInLocator = page.locator('div#pane-side'); // O painel de conversas que aparece após o login
 
             try {
-                const qrLocator = page.locator('div[data-ref]');
-                await qrLocator.waitFor({ state: 'visible', timeout: 5000 });
-                const qrCodeData = await qrLocator.getAttribute('data-ref');
+                // Espera pelo primeiro dos dois elementos a aparecer
+                await Promise.race([
+                    qrLocator.waitFor({ state: 'visible', timeout: 20000 }),
+                    loggedInLocator.waitFor({ state: 'visible', timeout: 20000 })
+                ]);
 
-                if (qrCodeData && qrCodeData !== lastQrCode) {
-                    console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
+                // Verifica qual dos dois apareceu
+                if (await loggedInLocator.isVisible()) {
+                    console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
                     await connectionRef.update({
-                        status: 'awaiting_scan',
-                        qrCode: qrCodeData,
+                        status: 'conectado',
+                        qrCode: FieldValue.delete(),
                     });
-                    lastQrCode = qrCodeData;
+                    if (context) await context.close();
+                    return; // Sucesso, sai da função
+                }
+
+                if (await qrLocator.isVisible()) {
+                    const qrCodeData = await qrLocator.getAttribute('data-ref');
+                    if (qrCodeData && qrCodeData !== lastQrCode) {
+                        console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
+                        await connectionRef.update({
+                            status: 'awaiting_scan',
+                            qrCode: qrCodeData,
+                        });
+                        lastQrCode = qrCodeData;
+                    }
                 }
             } catch (e) {
-                console.log(`[QR] QR code não visível, aguardando...`);
+                console.log(`[QR] Nenhum elemento (QR ou Login) visível, a tentar novamente...`);
             }
+            
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
         throw new Error('Timeout de 2 minutos atingido.');
         
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
-        
-        if (context) {
-            try {
-                const screenshotDir = path.join(SESSIONS_BASE_PATH, 'screenshots');
-                if (!require('fs').existsSync(screenshotDir)) {
-                    require('fs').mkdirSync(screenshotDir, { recursive: true });
-                }
-                const screenshotPath = path.join(screenshotDir, `erro_qr_${connectionId}.png`);
-                await context.pages()[0].screenshot({ path: screenshotPath });
-                console.log(`[DEBUG] Screenshot de erro salvo em: ${screenshotPath}`);
-            } catch (screenshotError) {
-                console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
-            }
-        }
         
         try {
             await connectionRef.update({ 
