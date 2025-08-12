@@ -3,7 +3,6 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-// A CORREÇÃO COMEÇA AQUI: Usamos a sintaxe correta do Admin SDK
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO ---
@@ -15,7 +14,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 }
 
 const SESSIONS_BASE_PATH = '/data/sessions'; 
-const SCREENSHOTS_PATH = '/data/screenshots'; // Pasta para guardar os screenshots
+const SCREENSHOTS_PATH = '/data/screenshots';
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -82,7 +81,6 @@ async function executarCampanha(campanha) {
     }
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
     
-    // PARA DEBUG LOCAL, MUDE PARA headless: false
     context = await chromium.launchPersistentContext(sessionPath, { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
@@ -127,16 +125,10 @@ async function generateQrCode(connectionId) {
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
-        // PARA DEBUG LOCAL, MUDE PARA headless: false
         context = await chromium.launchPersistentContext(sessionPath, { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const page = context.pages()[0] || await context.newPage();
         
         await page.goto('https://web.whatsapp.com');
-        
-        // MELHORIA: Pausa inicial para a página estabilizar no servidor
-        console.log('[QR] A aguardar 7 segundos para a página estabilizar...');
-        await new Promise(resolve => setTimeout(resolve, 7000));
-
         console.log(`[QR] Aguardando QR Code para ${connectionId} (timeout de 2 minutos)...`);
         let lastQrCode = null;
 
@@ -156,8 +148,7 @@ async function generateQrCode(connectionId) {
 
             try {
                 const qrLocator = page.locator('div[data-ref]');
-                // MELHORIA: Aumentamos o tempo de espera para encontrar o QR code
-                await qrLocator.waitFor({ state: 'visible', timeout: 10000 }); 
+                await qrLocator.waitFor({ state: 'visible', timeout: 5000 });
                 const qrCodeData = await qrLocator.getAttribute('data-ref');
 
                 if (qrCodeData && qrCodeData !== lastQrCode) {
@@ -193,7 +184,6 @@ async function generateQrCode(connectionId) {
             qrCode: FieldValue.delete(),
         });
     } finally {
-        // A CORREÇÃO ESTÁ AQUI: Verificamos apenas se o contexto existe antes de o fechar.
         if (context) {
             await context.close();
             console.log(`[QR] Instância para ${connectionId} fechada.`);
