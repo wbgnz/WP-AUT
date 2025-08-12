@@ -1,11 +1,9 @@
-// worker-full.js
 const { chromium } = require('playwright');
 const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
-const { getFirestore } = require('firebase-admin/firestore');
+const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc, addDoc, serverTimestamp, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO ---
 let serviceAccount;
@@ -15,275 +13,187 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
+// Caminho base para todas as sessões de login
+const SESSIONS_BASE_PATH = '/data/sessions'; 
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = getFirestore();
 
-// Diretório base para sessões (cada cliente terá sua subpasta)
-const SESSIONS_BASE = path.join('/tmp', 'whatsapp_sessions');
-if (!fs.existsSync(SESSIONS_BASE)) fs.mkdirSync(SESSIONS_BASE, { recursive: true });
-
-// --- MONITORAMENTO DO SISTEMA ---
-process.on('SIGTERM', () => {
-  console.log('[SYSTEM] Recebido SIGTERM. Encerrando processo...');
-  logMemoryUsage();
-  process.exit(0);
-});
-
-function logMemoryUsage() {
-  const used = process.memoryUsage();
-  console.log('[MEMÓRIA] Uso atual:', {
-    rss: `${Math.round(used.rss / 1024 / 1024)} MB`,
-    heapTotal: `${Math.round(used.heapTotal / 1024 / 1024)} MB`,
-    heapUsed: `${Math.round(used.heapUsed / 1024 / 1024)} MB`
-  });
+// --- FUNÇÕES DO ROBÔ (Humanização) ---
+function delay(minSeconds, maxSeconds) { 
+    const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000; 
+    console.log(`[HUMANIZADOR] Pausa de ${Math.round(ms/1000)} segundos...`); 
+    return new Promise(resolve => setTimeout(resolve, ms)); 
 }
 
-function delay(minSeconds = 1, maxSeconds = 3) {
-  const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000;
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function typeLikeHuman(locator, text) { 
+    console.log('[HUMANIZADOR] Clicando no campo para focar...'); 
+    await locator.click(); 
+    console.log('[HUMANIZADOR] Simulando digitação...'); 
+    await locator.type(text, { delay: Math.random() * 120 + 40 }); 
 }
 
-// Digitação "humana" - opcional para usar em campanhas
-async function typeLikeHuman(locator, text) {
-  await locator.click();
-  await locator.type(text, { delay: Math.random() * 120 + 40 });
+async function handlePopups(page) { 
+    console.log('[FASE 2] Verificando a presença de pop-ups...'); 
+    const possibleSelectors = [ 
+        page.getByRole('button', { name: 'Continuar' }), 
+        page.getByRole('button', { name: /OK|Entendi|Concluir/i }), 
+        page.getByLabel('Fechar', { exact: true }) 
+    ]; 
+    for (const selector of possibleSelectors) { 
+        try { 
+            await selector.waitFor({ timeout: 3000 }); 
+            await selector.click({ force: true }); 
+            console.log('[FASE 2] Pop-up fechado.'); 
+            return; 
+        } catch (error) {} 
+    } 
+    console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.'); 
 }
 
-// --- FUNÇÃO PARA EXTRAIR O CÓDIGO NUMÉRICO (OU ALFANUMÉRICO) ---
-async function extrairCodigoNumeric(page) {
-  // Espera texto guia existir
-  await page.waitForSelector('text=Insira o código no seu celular', { timeout: 60000 });
-
-  // Executa no browser para tentar extrair o código de forma robusta
-  const codigo = await page.evaluate(() => {
-    // procura um elemento que contenha o texto guia
-    const xpath = "//div[contains(., 'Insira o código no seu celular') or contains(., 'Insira o código')]";
-    const node = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-    if (!node) return null;
-
-    // Coleta text nodes dentro do container
-    function getTextNodes(root) {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
-      const texts = [];
-      let n;
-      while ((n = walker.nextNode())) {
-        const t = n.nodeValue.trim();
-        if (t) texts.push(t);
-      }
-      return texts;
-    }
-
-    const texts = getTextNodes(node);
-    const joined = texts.join(' ');
-    // tenta extrair algo no padrão tipo "AB12-C34X" ou "1234-5678" ou "TSC8-E94X"
-    const match = joined.match(/[A-Z0-9]{2,}(-[A-Z0-9]{2,})*/i);
-    if (match) return match[0].toUpperCase();
-    // fallback: retorna o conteúdo textual acumulado
-    return joined.trim().substring(0, 50);
-  });
-
-  return codigo;
-}
-
-// --- FUNÇÃO DE LOGIN POR NÚMERO (captura código e monitora login) ---
-async function iniciarLoginPorNumero(numero, clienteId) {
-  const sessionDir = path.join(SESSIONS_BASE, `${clienteId}`);
-  if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-
-  const context = await chromium.launchPersistentContext(sessionDir, {
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-
-  const page = await context.newPage();
-  await page.goto(`https://web.whatsapp.com/send?phone=${numero}`, { waitUntil: 'domcontentloaded' });
-
-  // Aguarda a página colocar o widget de login (pode ser QR code OU código numérico)
-  // Primeiro tentamos detectar a tela de código numérico
-  let codigo = null;
-  try {
-    codigo = await extrairCodigoNumeric(page);
-  } catch (err) {
-    console.log('[LOGIN] Tela de código numérico não detectada ou extração falhou:', err.message || err);
-  }
-
-  // Se não extraiu código numérico, tentamos capturar QR code (canvas) como fallback
-  let qrBase64 = null;
-  try {
-    if (!codigo) {
-      // tenta selector de canvas do QR
-      const qrLocator = page.locator('canvas');
-      if (await qrLocator.count() > 0) {
-        const buffer = await qrLocator.first().screenshot();
-        qrBase64 = buffer.toString('base64');
-      }
-    }
-  } catch (err) {
-    console.log('[LOGIN] não foi possível capturar QR. Erro:', err.message || err);
-  }
-
-  // Salva no Firestore o doc de login com informações iniciais
-  const docRef = db.collection('logins').doc(clienteId);
-  const payloadInit = {
-    numero,
-    status: 'aguardando_confirmacao',
-    criadoEm: admin.firestore.FieldValue.serverTimestamp()
-  };
-  if (codigo) payloadInit.codigo = codigo;
-  if (qrBase64) payloadInit.qr = `data:image/png;base64,${qrBase64}`;
-
-  await docRef.set(payloadInit);
-
-  // Inicia monitoramento em background (não bloqueia quem chamou)
-  (async () => {
-    try {
-      // Se já temos o codigo capturado, atualizamos o doc (garantia)
-      if (codigo) {
-        await docRef.update({ codigo, status: 'aguardando_confirmacao' });
-      } else if (qrBase64) {
-        await docRef.update({ qr: `data:image/png;base64,${qrBase64}`, status: 'aguardando_confirmacao' });
-      } else {
-        // nenhum dos dois detectados: deixamos como erro e fechamos o contexto
-        await docRef.update({ status: 'erro', erroMsg: 'Não detectado QR nem código' });
-        await context.close();
-        return;
-      }
-
-      // Espera o login efetivo acontecer (pane-side existe): timeout configurável (ex: 5min)
-      try {
-        await page.waitForSelector('#pane-side', { timeout: 5 * 60 * 1000 });
-        console.log(`[LOGIN] Cliente ${clienteId} logado com sucesso!`);
-
-        await docRef.update({
-          status: 'conectado',
-          conectadoEm: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        // opcional: salvar metadados da sessão, phone, etc
-      } catch (waitErr) {
-        console.log(`[LOGIN] Timeout aguardando login para ${clienteId}.`);
-        await docRef.update({
-          status: 'timeout',
-          erroMsg: 'Timeout aguardando o usuário concluir o login (5min).'
-        });
-      }
-    } catch (bgErr) {
-      console.error('[LOGIN background] Erro durante o monitoramento:', bgErr);
-      try {
-        await docRef.update({ status: 'erro', erroMsg: bgErr.message || String(bgErr) });
-      } catch (_) {}
-    } finally {
-      // Sempre tentamos fechar o contexto (mas se você quer manter a sessão ativa, pode manter)
-      try {
-        await context.close();
-      } catch (_) {}
-    }
-  })();
-
-  // retorna imediatamente o que conseguimos (codigo e/ou qr)
-  return { codigo, qr: qrBase64 ? `data:image/png;base64,${qrBase64}` : null };
-}
-
-// --- FUNÇÃO PRINCIPAL ORIGINAL (campanhas) ---
-// Mantive sua função executarCampanha praticamente igual à sua versão,
-// apenas referenciando o SESSIONS_BASE quando precisar de pasta persistente.
+// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA (ATUALIZADA) ---
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
-  const campanhaRef = db.collection('campanhas').doc(campanha.id);
+  const campanhaRef = doc(db, 'campanhas', campanha.id);
   let context;
 
-  try {
-    await campanhaRef.update({ status: 'rodando' });
-    let contatosParaEnviar = [];
+  const connectionId = campanha.connectionId;
+  if (!connectionId) {
+    throw new Error('ID da conexão não foi fornecido na campanha.');
+  }
+  const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
+  console.log(`[WORKER] A usar a sessão em: ${sessionPath}`);
 
+  try {
+    await updateDoc(campanhaRef, { status: 'rodando' });
+    let contatosParaEnviar = [];
     if (campanha.tipo === 'quantity') {
-      const q = db.collection('contatos')
-        .where('status', '==', 'disponivel')
-        .orderBy('criadoEm', 'asc')
-        .limit(campanha.totalContatos);
-      const snapshot = await q.get();
+      const q = query(collection(db, 'contatos'), where('status', '==', 'disponivel'), orderBy('criadoEm', 'asc'), limit(campanha.totalContatos));
+      const snapshot = await getDocs(q);
       contatosParaEnviar = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     } else {
-      const contactIds = campanha.contactIds || [];
-      const results = await Promise.all(contactIds.map(id => db.collection('contatos').doc(id).get()));
-      contatosParaEnviar = results
-        .filter(d => d.exists && d.data().status === 'disponivel')
-        .map(d => ({ id: d.id, ...d.data() }));
+      const contactIds = campanha.contactIds;
+      const promises = contactIds.map(id => getDoc(doc(db, 'contatos', id)));
+      const results = await Promise.all(promises);
+      contatosParaEnviar = results.filter(d => d.exists() && d.data().status === 'disponivel').map(d => ({ id: d.id, ...d.data() }));
     }
-
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
-    console.log(`[WORKER] ${contatosParaEnviar.length} contatos serão processados.`);
-
-    // Use uma sessão global para campanhas (ou personalize por cliente se precisar)
-    const USER_DATA_DIR = path.join(SESSIONS_BASE, 'campaign_default');
-    if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true });
-
-    context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-
-    const pages = context.pages();
-    const page = pages.length > 0 ? pages[0] : await context.newPage();
+    
+    context = await chromium.launchPersistentContext(sessionPath, { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const page = context.pages()[0];
     page.setDefaultTimeout(90000);
-
-    await page.goto('https://web.whatsapp.com', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(5000);
+    await page.goto('https://web.whatsapp.com');
     await page.waitForSelector('div#pane-side', { state: 'visible' });
+    await handlePopups(page);
+    const mensagemTemplate = campanha.mensagemTemplate;
 
-    // Tentativa de fechar popups (conforme seu código original)
-    try {
-      const possible = [
-        page.getByRole('button', { name: 'Continuar' }),
-        page.getByRole('button', { name: /OK|Entendi|Concluir/i })
-      ];
-      for (const p of possible) {
-        try { await p.click({ timeout: 2000 }); } catch (_) {}
-      }
-    } catch (_) {}
-
-    const mensagemTemplate = campanha.mensagemTemplate || '';
     for (const contato of contatosParaEnviar) {
-      console.log(`--------------------------------------------------`);
       console.log(`[DISPARO] Preparando para ${contato.nome || contato.numero}`);
-
-      let mensagemFinal = mensagemTemplate.replace(/{{nome}}/g, contato.nome || '');
-      await page.goto(`https://web.whatsapp.com/send?phone=${contato.numero}`, { waitUntil: 'domcontentloaded' });
-
-      // Localiza caixa de texto - robustez para diferentes localizações no DOM
-      const messageBox = page.getByRole('textbox', { name: /Digite uma mensagem|Mensagem/i }).first();
-      await messageBox.waitFor({ timeout: 15000 });
+      let mensagemFinal = mensagemTemplate.replace(new RegExp(`{{nome}}`, 'g'), contato.nome);
+      await page.goto(`https://web.whatsapp.com/send?phone=${contato.numero}`);
+      const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' }).getByRole('paragraph');
+      await messageBox.waitFor();
       await typeLikeHuman(messageBox, mensagemFinal);
-
       const sendButton = page.getByLabel('Enviar');
-      await sendButton.waitFor({ timeout: 5000 });
       await sendButton.click();
-
-      const contatoRef = db.collection('contatos').doc(contato.id);
-      await contatoRef.update({ status: 'usado' });
-
+      const contatoRef = doc(db, 'contatos', contato.id);
+      await updateDoc(contatoRef, { status: 'usado' });
       console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
-      await delay(campanha.minDelay || 2, campanha.maxDelay || 5);
-      logMemoryUsage();
+      await delay(campanha.minDelay, campanha.maxDelay);
     }
-
-    await campanhaRef.update({ status: 'concluida' });
+    await updateDoc(campanhaRef, { status: 'concluida' });
     console.log(`[WORKER] Campanha ID: ${campanha.id} concluída com sucesso!`);
   } catch (error) {
     console.error(`[WORKER] Erro ao executar campanha ID: ${campanha.id}.`, error);
-    try { await campanhaRef.update({ status: 'erro', erroMsg: error.message }); } catch (_) {}
+    await updateDoc(campanhaRef, { status: 'erro', erroMsg: error.message });
   } finally {
     if (context) {
-      try { await context.close(); } catch (_) {}
+      await context.close();
     }
   }
 }
 
-// --- API ---
+// --- NOVA FUNÇÃO INTELIGENTE PARA GERAR QR CODE ---
+async function generateQrCode(connectionId) {
+    let context;
+    const connectionRef = doc(db, 'conexoes', connectionId);
+    const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
+    const TIMEOUT_MS = 120000; // 2 minutos
+    const startTime = Date.now();
+
+    try {
+        console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
+        context = await chromium.launchPersistentContext(sessionPath, { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const page = context.pages()[0] || await context.newPage();
+        
+        await page.goto('https://web.whatsapp.com');
+
+        console.log(`[QR] Aguardando QR Code para ${connectionId} (timeout de 2 minutos)...`);
+        
+        let lastQrCode = null;
+
+        // Loop principal que dura no máximo 2 minutos
+        while (Date.now() - startTime < TIMEOUT_MS) {
+            // 1. Verifica se já fez login (sucesso)
+            try {
+                await page.waitForSelector('div#pane-side', { state: 'visible', timeout: 1000 }); // Tenta por 1 segundo
+                console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
+                await updateDoc(connectionRef, {
+                    status: 'conectado',
+                    qrCode: FieldValue.delete(),
+                });
+                // Se conseguiu, sai da função com sucesso
+                if (context && !context.isClosed()) await context.close();
+                return;
+            } catch (e) {
+                // Login ainda não aconteceu, o que é normal. Continue...
+            }
+
+            // 2. Se não fez login, procura por um QR code para atualizar
+            try {
+                const qrLocator = page.locator('div[data-ref]');
+                await qrLocator.waitFor({ state: 'visible', timeout: 5000 }); // Tenta por 5 segundos
+                const qrCodeData = await qrLocator.getAttribute('data-ref');
+
+                if (qrCodeData && qrCodeData !== lastQrCode) {
+                    console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
+                    await updateDoc(connectionRef, {
+                        status: 'awaiting_scan',
+                        qrCode: qrCodeData,
+                    });
+                    lastQrCode = qrCodeData;
+                }
+            } catch (e) {
+                console.log(`[QR] QR code não visível, aguardando...`);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Pausa de 2 segundos antes de tentar de novo
+        }
+
+        // Se o loop terminou, significa que o tempo esgotou
+        throw new Error('Timeout de 2 minutos atingido.');
+
+    } catch (error) {
+        console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
+        await updateDoc(connectionRef, {
+            status: 'desconectado',
+            error: 'Timeout: QR Code não foi escaneado em 2 minutos.',
+            qrCode: FieldValue.delete(),
+        });
+    } finally {
+        if (context && !context.isClosed()) {
+            await context.close();
+            console.log(`[QR] Instância para ${connectionId} fechada.`);
+        }
+    }
+}
+
+
+// --- CONFIGURAÇÃO DO SERVIDOR DE API (ATUALIZADA) ---
 const app = express();
-app.use(cors());
+app.use(cors()); 
 app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
@@ -291,50 +201,62 @@ app.get('/', (req, res) => {
   res.send('Motor de automação do WhatsApp está online e pronto.');
 });
 
-// Rota para iniciar login por número (captura código / qr e monitora)
-app.post('/connect', async (req, res) => {
-  const { numero, clienteId } = req.body;
-  if (!numero || !clienteId) {
-    return res.status(400).send({ error: 'numero e clienteId são obrigatórios.' });
-  }
-
-  console.log(`[API] Pedido /connect para cliente ${clienteId} (numero=${numero})`);
-
-  try {
-    const { codigo, qr } = await iniciarLoginPorNumero(numero, clienteId);
-
-    // Retorna o que foi capturado (código e/ou QR). Se nenhum, responde 500.
-    if (!codigo && !qr) {
-      return res.status(500).send({ error: 'Não foi possível detectar código nem QR. Veja logs.' });
-    }
-
-    return res.send({ codigo, qr });
-  } catch (err) {
-    console.error('[API] Erro em /connect:', err);
-    return res.status(500).send({ error: err.message || 'erro interno' });
-  }
-});
-
-// Rota de exemplo para iniciar campanha (mantive a estrutura)
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
   if (!campaignId) {
     return res.status(400).send({ error: 'campaignId é obrigatório.' });
   }
-  res.status(202).send({ message: 'Campanha aceita. A execução começará em segundo plano.' });
-
+  console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
+  res.status(202).send({ message: 'Campanha aceite. A execução começará em segundo plano.' });
   try {
-    const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
-    if (!campaignDoc.exists) {
-      console.error(`[API] Campanha ${campaignId} não encontrada.`);
-      return;
+    const campaignDoc = await getDoc(doc(db, 'campanhas', campaignId));
+    if (!campaignDoc.exists()) {
+      throw new Error('Campanha não encontrada no banco de dados.');
     }
     const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
-    setImmediate(() => executarCampanha(campanha));
+    executarCampanha(campanha);
   } catch (error) {
     console.error(`[API] Erro ao buscar ou iniciar a campanha ${campaignId}:`, error);
   }
 });
+
+// --- NOVOS ENDPOINTS PARA GERIR CONEXÕES ---
+app.post('/connections', async (req, res) => {
+  const { name } = req.body;
+  if (!name) {
+    return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
+  }
+
+  try {
+    const connectionRef = await addDoc(collection(db, 'conexoes'), {
+      name: name,
+      status: 'generating_qrcode',
+      criadoEm: serverTimestamp(),
+    });
+
+    res.status(201).send({ id: connectionRef.id, message: 'Conexão criada. A gerar QR Code em segundo plano.' });
+    generateQrCode(connectionRef.id);
+
+  } catch (error) {
+    console.error('[API] Erro ao criar conexão:', error);
+    res.status(500).send({ error: 'Falha ao criar conexão.' });
+  }
+});
+
+app.get('/connections/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const connectionDoc = await getDoc(doc(db, 'conexoes', id));
+        if (!connectionDoc.exists()) {
+            return res.status(404).send({ error: 'Conexão não encontrada.' });
+        }
+        res.status(200).send({ id: connectionDoc.id, ...connectionDoc.data() });
+    } catch (error) {
+        console.error(`[API] Erro ao buscar status da conexão ${id}:`, error);
+        res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
+    }
+});
+
 
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
