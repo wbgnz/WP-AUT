@@ -128,7 +128,7 @@ async function handleConnectionLogin(connectionId) {
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
     const TIMEOUT_MS = 180000; // 3 minutos
     const startTime = Date.now();
-    let hasLoggedHTML = false; // Flag para registar o HTML apenas uma vez
+    let hasReloaded = false; // Flag para controlar o reload
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
@@ -181,16 +181,13 @@ async function handleConnectionLogin(connectionId) {
                 console.log(`[QR] Nenhum elemento (QR ou Login) visível, a tentar novamente...`);
             }
             
-            // --- LÓGICA DE DEPURAÇÃO ADICIONADA ---
-            if (!hasLoggedHTML && Date.now() - startTime > 45000 && lastQrCode) {
-                console.log('[DEBUG] Nenhum sinal de login após 45s. A registar o HTML da página...');
-                const pageContent = await page.content();
-                console.log('--- INÍCIO DO HTML DA PÁGINA ---');
-                console.log(pageContent);
-                console.log('--- FIM DO HTML DA PÁGINA ---');
-                hasLoggedHTML = true;
+            // --- SUA SUGESTÃO IMPLEMENTADA AQUI ---
+            if (!hasReloaded && Date.now() - startTime > 60000) {
+                console.log('[DEBUG] A página parece estar presa após o scan. A tentar recarregar...');
+                await page.reload({ waitUntil: 'domcontentloaded' });
+                hasReloaded = true; // Garante que só recarregamos uma vez
             }
-            // --- FIM DA LÓGICA DE DEPURAÇÃO ---
+            // --- FIM DA IMPLEMENTAÇÃO ---
 
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
