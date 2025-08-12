@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# Sair em caso de erro
-set -o errexit
+# Sair imediatamente se um comando falhar
+set -e
 
-# 1. Instala as dependências do package.json
+# Instala as dependências do package.json
 npm install
 
-# 2. Define o caminho para o cache do Playwright dentro do nosso disco persistente
-export PLAYWRIGHT_BROWSERS_PATH=/data/playwright-cache
-
-# 3. Instala os navegadores no caminho especificado
-npx playwright install
+# Instala os navegadores do Playwright da forma correta para o Render
+npx playwright install --with-deps chromium

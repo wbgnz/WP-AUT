@@ -4,7 +4,7 @@
   "main": "worker.js",
   "scripts": {
     "start": "node worker.js",
-    "build": "npm install",
+    "build": "bash build.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
