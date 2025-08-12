@@ -82,6 +82,7 @@ async function executarCampanha(campanha) {
     }
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
     
+    // PARA DEBUG LOCAL, MUDE PARA headless: false
     context = await chromium.launchPersistentContext(sessionPath, { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
@@ -126,10 +127,16 @@ async function generateQrCode(connectionId) {
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
+        // PARA DEBUG LOCAL, MUDE PARA headless: false
         context = await chromium.launchPersistentContext(sessionPath, { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const page = context.pages()[0] || await context.newPage();
         
         await page.goto('https://web.whatsapp.com');
+        
+        // MELHORIA: Pausa inicial para a página estabilizar no servidor
+        console.log('[QR] A aguardar 7 segundos para a página estabilizar...');
+        await new Promise(resolve => setTimeout(resolve, 7000));
+
         console.log(`[QR] Aguardando QR Code para ${connectionId} (timeout de 2 minutos)...`);
         let lastQrCode = null;
 
@@ -149,7 +156,8 @@ async function generateQrCode(connectionId) {
 
             try {
                 const qrLocator = page.locator('div[data-ref]');
-                await qrLocator.waitFor({ state: 'visible', timeout: 5000 });
+                // MELHORIA: Aumentamos o tempo de espera para encontrar o QR code
+                await qrLocator.waitFor({ state: 'visible', timeout: 10000 }); 
                 const qrCodeData = await qrLocator.getAttribute('data-ref');
 
                 if (qrCodeData && qrCodeData !== lastQrCode) {
