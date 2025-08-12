@@ -126,7 +126,6 @@ async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
-    // A CORREÇÃO ESTÁ AQUI: Timeout aumentado para 3 minutos (180000 ms)
     const TIMEOUT_MS = 180000; 
     const startTime = Date.now();
 
@@ -162,8 +161,8 @@ async function handleConnectionLogin(connectionId) {
                         status: 'conectado',
                         qrCode: FieldValue.delete(),
                     });
-                    if (context) await context.close();
-                    return;
+                    // Não feche o contexto aqui, deixe o finally tratar disso
+                    return; // Sucesso, sai do loop
                 }
 
                 if (await qrLocator.isVisible()) {
