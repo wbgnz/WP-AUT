@@ -3,7 +3,8 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { getFirestore, query, collection, where, getDocs, limit, orderBy, updateDoc, doc, getDoc, addDoc, serverTimestamp, FieldValue } = require('firebase-admin/firestore');
+// A CORREÇÃO COMEÇA AQUI: Usamos a sintaxe correta do Admin SDK
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO ---
 let serviceAccount;
@@ -55,7 +56,7 @@ async function handlePopups(page) {
 // --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA ---
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
-  const campanhaRef = doc(db, 'campanhas', campanha.id);
+  const campanhaRef = db.collection('campanhas').doc(campanha.id);
   let context;
 
   const connectionId = campanha.connectionId;
@@ -66,17 +67,17 @@ async function executarCampanha(campanha) {
   console.log(`[WORKER] A usar a sessão em: ${sessionPath}`);
 
   try {
-    await updateDoc(campanhaRef, { status: 'rodando' });
+    await campanhaRef.update({ status: 'rodando' });
     let contatosParaEnviar = [];
     if (campanha.tipo === 'quantity') {
-      const q = query(collection(db, 'contatos'), where('status', '==', 'disponivel'), orderBy('criadoEm', 'asc'), limit(campanha.totalContatos));
-      const snapshot = await getDocs(q);
+      const q = db.collection('contatos').where('status', '==', 'disponivel').orderBy('criadoEm', 'asc').limit(campanha.totalContatos);
+      const snapshot = await q.get();
       contatosParaEnviar = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     } else {
       const contactIds = campanha.contactIds;
-      const promises = contactIds.map(id => getDoc(doc(db, 'contatos', id)));
+      const promises = contactIds.map(id => db.collection('contatos').doc(id).get());
       const results = await Promise.all(promises);
-      contatosParaEnviar = results.filter(d => d.exists() && d.data().status === 'disponivel').map(d => ({ id: d.id, ...d.data() }));
+      contatosParaEnviar = results.filter(d => d.exists && d.data().status === 'disponivel').map(d => ({ id: d.id, ...d.data() }));
     }
     if (contatosParaEnviar.length === 0) throw new Error('Nenhum contato válido encontrado para esta campanha.');
     
@@ -97,16 +98,16 @@ async function executarCampanha(campanha) {
       await typeLikeHuman(messageBox, mensagemFinal);
       const sendButton = page.getByLabel('Enviar');
       await sendButton.click();
-      const contatoRef = doc(db, 'contatos', contato.id);
-      await updateDoc(contatoRef, { status: 'usado' });
+      const contatoRef = db.collection('contatos').doc(contato.id);
+      await contatoRef.update({ status: 'usado' });
       console.log(`[WORKER] Contato ${contato.nome} atualizado para 'usado'.`);
       await delay(campanha.minDelay, campanha.maxDelay);
     }
-    await updateDoc(campanhaRef, { status: 'concluida' });
+    await campanhaRef.update({ status: 'concluida' });
     console.log(`[WORKER] Campanha ID: ${campanha.id} concluída com sucesso!`);
   } catch (error) {
     console.error(`[WORKER] Erro ao executar campanha ID: ${campanha.id}.`, error);
-    await updateDoc(campanhaRef, { status: 'erro', erroMsg: error.message });
+    await campanhaRef.update({ status: 'erro', erroMsg: error.message });
   } finally {
     if (context) {
       await context.close();
@@ -117,7 +118,7 @@ async function executarCampanha(campanha) {
 // --- FUNÇÃO INTELIGENTE PARA GERAR QR CODE ---
 async function generateQrCode(connectionId) {
     let context;
-    const connectionRef = doc(db, 'conexoes', connectionId);
+    const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
     const TIMEOUT_MS = 120000; // 2 minutos
     const startTime = Date.now();
@@ -135,7 +136,7 @@ async function generateQrCode(connectionId) {
             try {
                 await page.waitForSelector('div#pane-side', { state: 'visible', timeout: 1000 });
                 console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
-                await updateDoc(connectionRef, {
+                await connectionRef.update({
                     status: 'conectado',
                     qrCode: FieldValue.delete(),
                 });
@@ -152,7 +153,7 @@ async function generateQrCode(connectionId) {
 
                 if (qrCodeData && qrCodeData !== lastQrCode) {
                     console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
-                    await updateDoc(connectionRef, {
+                    await connectionRef.update({
                         status: 'awaiting_scan',
                         qrCode: qrCodeData,
                     });
@@ -166,7 +167,7 @@ async function generateQrCode(connectionId) {
         throw new Error('Timeout de 2 minutos atingido.');
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
-        await updateDoc(connectionRef, {
+        await connectionRef.update({
             status: 'desconectado',
             error: 'Timeout: QR Code não foi escaneado em 2 minutos.',
             qrCode: FieldValue.delete(),
@@ -195,8 +196,8 @@ app.post('/start-campaign', async (req, res) => {
   console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
   res.status(202).send({ message: 'Campanha aceite.' });
   try {
-    const campaignDoc = await getDoc(doc(db, 'campanhas', campaignId));
-    if (!campaignDoc.exists()) throw new Error('Campanha não encontrada.');
+    const campaignDoc = await db.collection('campanhas').doc(campaignId).get();
+    if (!campaignDoc.exists) throw new Error('Campanha não encontrada.');
     const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
     executarCampanha(campanha);
   } catch (error) {
@@ -208,10 +209,10 @@ app.post('/connections', async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   try {
-    const connectionRef = await addDoc(collection(db, 'conexoes'), {
+    const connectionRef = await db.collection('conexoes').add({
       name: name,
       status: 'generating_qrcode',
-      criadoEm: serverTimestamp(),
+      criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
     generateQrCode(connectionRef.id);
@@ -224,8 +225,8 @@ app.post('/connections', async (req, res) => {
 app.get('/connections/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        const connectionDoc = await getDoc(doc(db, 'conexoes', id));
-        if (!connectionDoc.exists()) return res.status(404).send({ error: 'Conexão não encontrada.' });
+        const connectionDoc = await db.collection('conexoes').doc(id).get();
+        if (!connectionDoc.exists) return res.status(404).send({ error: 'Conexão não encontrada.' });
         res.status(200).send({ id: connectionDoc.id, ...connectionDoc.data() });
     } catch (error) {
         console.error(`[API] Erro ao buscar status da conexão ${id}:`, error);
