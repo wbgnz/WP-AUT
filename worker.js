@@ -205,39 +205,6 @@ async function handleConnectionLogin(connectionId) {
     }
 }
 
-// --- NOVA FUNÇÃO PARA TESTAR CONEXÃO ---
-async function testarConexao(connectionId) {
-    let context;
-    const connectionRef = db.collection('conexoes').doc(connectionId);
-    const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
-    console.log(`[TESTE] Iniciando teste de conexão para ID: ${connectionId}`);
-
-    try {
-        context = await chromium.launchPersistentContext(sessionPath, {
-            headless: IS_HEADLESS,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        const page = context.pages()[0] || await context.newPage();
-        await page.goto('https://web.whatsapp.com', { timeout: 60000 });
-
-        // Tenta encontrar o sinal de que está logado
-        await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible', timeout: 45000 });
-        
-        console.log(`[TESTE] Sucesso! Conexão ${connectionId} está ativa.`);
-        await connectionRef.update({ lastCheck: FieldValue.serverTimestamp(), error: FieldValue.delete() });
-
-    } catch (error) {
-        console.error(`[TESTE] Falha! A conexão ${connectionId} não está ativa. Erro: ${error.message}`);
-        // Se falhar, significa que a sessão é inválida. Marcamos como desconectado.
-        await connectionRef.update({ status: 'desconectado', error: 'Sessão inválida. Por favor, conecte novamente.' });
-    } finally {
-        if (context) {
-            await context.close();
-            console.log(`[TESTE] Instância de teste para ${connectionId} fechada.`);
-        }
-    }
-}
-
 // --- CONFIGURAÇÃO DO SERVIDOR DE API ---
 const app = express();
 app.use(cors()); 
@@ -289,19 +256,6 @@ app.get('/connections/:id', async (req, res) => {
         res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
     }
 });
-
-// --- NOVO ENDPOINT PARA TESTAR CONEXÃO ---
-app.post('/connections/:id/test', async (req, res) => {
-    const { id } = req.params;
-    console.log(`[API] Pedido recebido para testar a conexão: ${id}`);
-    
-    // Responde imediatamente
-    res.status(202).send({ message: 'Pedido de teste aceite. Verifique os logs do motor.' });
-
-    // Executa o teste em segundo plano
-    testarConexao(id);
-});
-
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
 });
