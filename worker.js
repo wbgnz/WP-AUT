@@ -117,7 +117,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (ATUALIZADA) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -133,8 +133,12 @@ async function handleConnectionLogin(connectionId) {
         });
         const page = context.pages()[0] || await context.newPage();
         
+        await page.setViewportSize({ width: 1280, height: 800 });
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        console.log(`[QR] Aguardando QR Code para ${connectionId} (timeout de 2 minutos)...`);
+        
+        console.log(`[QR] A aguardar a página de aterrissagem carregar...`);
+        await page.getByRole('heading', { name: 'Use o WhatsApp no seu computador' }).waitFor({ timeout: 45000 });
+        console.log(`[QR] Página de aterrissagem confirmada. A procurar QR Code...`);
         
         let lastQrCode = null;
 
@@ -152,7 +156,7 @@ async function handleConnectionLogin(connectionId) {
 
             try {
                 const qrLocator = page.locator('div[data-ref]');
-                await qrLocator.waitFor({ state: 'visible', timeout: 5000 });
+                await qrLocator.waitFor({ state: 'visible', timeout: 10000 });
                 const qrCodeData = await qrLocator.getAttribute('data-ref');
 
                 if (qrCodeData && qrCodeData !== lastQrCode) {
