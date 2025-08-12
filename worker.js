@@ -13,7 +13,6 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = require('./firebase-service-account.json');
 }
 
-// Caminho base para todas as sessões de login
 const SESSIONS_BASE_PATH = '/data/sessions'; 
 
 admin.initializeApp({
@@ -53,7 +52,7 @@ async function handlePopups(page) {
     console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.'); 
 }
 
-// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA (ATUALIZADA) ---
+// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA ---
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
   const campanhaRef = doc(db, 'campanhas', campanha.id);
@@ -115,7 +114,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- NOVA FUNÇÃO INTELIGENTE PARA GERAR QR CODE ---
+// --- FUNÇÃO INTELIGENTE PARA GERAR QR CODE ---
 async function generateQrCode(connectionId) {
     let context;
     const connectionRef = doc(db, 'conexoes', connectionId);
@@ -129,32 +128,26 @@ async function generateQrCode(connectionId) {
         const page = context.pages()[0] || await context.newPage();
         
         await page.goto('https://web.whatsapp.com');
-
         console.log(`[QR] Aguardando QR Code para ${connectionId} (timeout de 2 minutos)...`);
-        
         let lastQrCode = null;
 
-        // Loop principal que dura no máximo 2 minutos
         while (Date.now() - startTime < TIMEOUT_MS) {
-            // 1. Verifica se já fez login (sucesso)
             try {
-                await page.waitForSelector('div#pane-side', { state: 'visible', timeout: 1000 }); // Tenta por 1 segundo
+                await page.waitForSelector('div#pane-side', { state: 'visible', timeout: 1000 });
                 console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
                 await updateDoc(connectionRef, {
                     status: 'conectado',
                     qrCode: FieldValue.delete(),
                 });
-                // Se conseguiu, sai da função com sucesso
                 if (context && !context.isClosed()) await context.close();
                 return;
             } catch (e) {
-                // Login ainda não aconteceu, o que é normal. Continue...
+                // Continue...
             }
 
-            // 2. Se não fez login, procura por um QR code para atualizar
             try {
                 const qrLocator = page.locator('div[data-ref]');
-                await qrLocator.waitFor({ state: 'visible', timeout: 5000 }); // Tenta por 5 segundos
+                await qrLocator.waitFor({ state: 'visible', timeout: 5000 });
                 const qrCodeData = await qrLocator.getAttribute('data-ref');
 
                 if (qrCodeData && qrCodeData !== lastQrCode) {
@@ -168,13 +161,9 @@ async function generateQrCode(connectionId) {
             } catch (e) {
                 console.log(`[QR] QR code não visível, aguardando...`);
             }
-
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Pausa de 2 segundos antes de tentar de novo
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
-
-        // Se o loop terminou, significa que o tempo esgotou
         throw new Error('Timeout de 2 minutos atingido.');
-
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         await updateDoc(connectionRef, {
@@ -190,8 +179,7 @@ async function generateQrCode(connectionId) {
     }
 }
 
-
-// --- CONFIGURAÇÃO DO SERVIDOR DE API (ATUALIZADA) ---
+// --- CONFIGURAÇÃO DO SERVIDOR DE API ---
 const app = express();
 app.use(cors()); 
 app.use(express.json());
@@ -203,40 +191,30 @@ app.get('/', (req, res) => {
 
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
-  if (!campaignId) {
-    return res.status(400).send({ error: 'campaignId é obrigatório.' });
-  }
+  if (!campaignId) return res.status(400).send({ error: 'campaignId é obrigatório.' });
   console.log(`[API] Pedido recebido para iniciar a campanha: ${campaignId}`);
-  res.status(202).send({ message: 'Campanha aceite. A execução começará em segundo plano.' });
+  res.status(202).send({ message: 'Campanha aceite.' });
   try {
     const campaignDoc = await getDoc(doc(db, 'campanhas', campaignId));
-    if (!campaignDoc.exists()) {
-      throw new Error('Campanha não encontrada no banco de dados.');
-    }
+    if (!campaignDoc.exists()) throw new Error('Campanha não encontrada.');
     const campanha = { id: campaignDoc.id, ...campaignDoc.data() };
     executarCampanha(campanha);
   } catch (error) {
-    console.error(`[API] Erro ao buscar ou iniciar a campanha ${campaignId}:`, error);
+    console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error);
   }
 });
 
-// --- NOVOS ENDPOINTS PARA GERIR CONEXÕES ---
 app.post('/connections', async (req, res) => {
   const { name } = req.body;
-  if (!name) {
-    return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
-  }
-
+  if (!name) return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   try {
     const connectionRef = await addDoc(collection(db, 'conexoes'), {
       name: name,
       status: 'generating_qrcode',
       criadoEm: serverTimestamp(),
     });
-
-    res.status(201).send({ id: connectionRef.id, message: 'Conexão criada. A gerar QR Code em segundo plano.' });
+    res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
     generateQrCode(connectionRef.id);
-
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
     res.status(500).send({ error: 'Falha ao criar conexão.' });
@@ -247,16 +225,13 @@ app.get('/connections/:id', async (req, res) => {
     const { id } = req.params;
     try {
         const connectionDoc = await getDoc(doc(db, 'conexoes', id));
-        if (!connectionDoc.exists()) {
-            return res.status(404).send({ error: 'Conexão não encontrada.' });
-        }
+        if (!connectionDoc.exists()) return res.status(404).send({ error: 'Conexão não encontrada.' });
         res.status(200).send({ id: connectionDoc.id, ...connectionDoc.data() });
     } catch (error) {
         console.error(`[API] Erro ao buscar status da conexão ${id}:`, error);
         res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
     }
 });
-
 
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
