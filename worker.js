@@ -3,6 +3,7 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+// A CORREÇÃO COMEÇA AQUI: Usamos a sintaxe correta do Admin SDK
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES E INICIALIZAÇÃO ---
@@ -14,7 +15,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 }
 
 const SESSIONS_BASE_PATH = '/data/sessions'; 
-const SCREENSHOTS_PATH = '/data/screenshots';
+const SCREENSHOTS_PATH = '/data/screenshots'; // Pasta para guardar os screenshots
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -168,6 +169,7 @@ async function generateQrCode(connectionId) {
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         
+        // --- LÓGICA DE SCREENSHOT ADICIONADA ---
         if (context) {
             try {
                 const screenshotPath = path.join(SCREENSHOTS_PATH, `erro_qr_${connectionId}.png`);
@@ -177,6 +179,7 @@ async function generateQrCode(connectionId) {
                 console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
             }
         }
+        // --- FIM DA LÓGICA DE SCREENSHOT ---
 
         await connectionRef.update({
             status: 'desconectado',
@@ -184,6 +187,7 @@ async function generateQrCode(connectionId) {
             qrCode: FieldValue.delete(),
         });
     } finally {
+        // A CORREÇÃO ESTÁ AQUI: Verificamos apenas se o contexto existe antes de o fechar.
         if (context) {
             await context.close();
             console.log(`[QR] Instância para ${connectionId} fechada.`);
