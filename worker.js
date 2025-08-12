@@ -15,6 +15,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 }
 
 const SESSIONS_BASE_PATH = '/data/sessions'; 
+const SCREENSHOTS_PATH = '/data/screenshots'; // Pasta para guardar os screenshots
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -167,9 +168,22 @@ async function generateQrCode(connectionId) {
         throw new Error('Timeout de 2 minutos atingido.');
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
+        
+        // --- LÓGICA DE SCREENSHOT ADICIONADA ---
+        if (context) {
+            try {
+                const screenshotPath = path.join(SCREENSHOTS_PATH, `erro_qr_${connectionId}.png`);
+                await context.pages()[0].screenshot({ path: screenshotPath });
+                console.log(`[DEBUG] Screenshot de erro salvo em: ${screenshotPath}`);
+            } catch (screenshotError) {
+                console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
+            }
+        }
+        // --- FIM DA LÓGICA DE SCREENSHOT ---
+
         await connectionRef.update({
             status: 'desconectado',
-            error: 'Timeout: QR Code não foi escaneado em 2 minutos.',
+            error: 'Timeout: QR Code não foi escaneado ou não foi encontrado na página.',
             qrCode: FieldValue.delete(),
         });
     } finally {
