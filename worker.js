@@ -141,7 +141,7 @@ async function generateQrCode(connectionId) {
                     status: 'conectado',
                     qrCode: FieldValue.delete(),
                 });
-                if (context && !context.isClosed()) await context.close();
+                if (context) await context.close();
                 return;
             } catch (e) {
                 // Continue...
@@ -169,7 +169,6 @@ async function generateQrCode(connectionId) {
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         
-        // --- LÓGICA DE SCREENSHOT ADICIONADA ---
         if (context) {
             try {
                 const screenshotPath = path.join(SCREENSHOTS_PATH, `erro_qr_${connectionId}.png`);
@@ -179,7 +178,6 @@ async function generateQrCode(connectionId) {
                 console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
             }
         }
-        // --- FIM DA LÓGICA DE SCREENSHOT ---
 
         await connectionRef.update({
             status: 'desconectado',
@@ -187,7 +185,8 @@ async function generateQrCode(connectionId) {
             qrCode: FieldValue.delete(),
         });
     } finally {
-        if (context && !context.isClosed()) {
+        // A CORREÇÃO ESTÁ AQUI: Verificamos apenas se o contexto existe antes de o fechar.
+        if (context) {
             await context.close();
             console.log(`[QR] Instância para ${connectionId} fechada.`);
         }
