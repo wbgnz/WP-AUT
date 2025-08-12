@@ -128,6 +128,7 @@ async function handleConnectionLogin(connectionId) {
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
     const TIMEOUT_MS = 180000; // 3 minutos
     const startTime = Date.now();
+    let hasLoggedHTML = false; // Flag para registar o HTML apenas uma vez
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
@@ -147,17 +148,14 @@ async function handleConnectionLogin(connectionId) {
 
         while (Date.now() - startTime < TIMEOUT_MS) {
             const qrLocator = page.locator('div[data-ref]');
-            // A CORREÇÃO ESTÁ AQUI: Usamos um seletor mais fiável para a barra de pesquisa.
             const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
 
             try {
-                // Espera pelo primeiro dos dois elementos a aparecer
                 await Promise.race([
                     qrLocator.waitFor({ state: 'visible', timeout: 20000 }),
                     loggedInLocator.waitFor({ state: 'visible', timeout: 20000 })
                 ]);
 
-                // Verifica qual dos dois apareceu
                 if (await loggedInLocator.isVisible()) {
                     console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
                     await connectionRef.update({
@@ -165,7 +163,7 @@ async function handleConnectionLogin(connectionId) {
                         qrCode: FieldValue.delete(),
                     });
                     if (context) await context.close();
-                    return; // Sucesso, sai da função
+                    return;
                 }
 
                 if (await qrLocator.isVisible()) {
@@ -183,6 +181,17 @@ async function handleConnectionLogin(connectionId) {
                 console.log(`[QR] Nenhum elemento (QR ou Login) visível, a tentar novamente...`);
             }
             
+            // --- LÓGICA DE DEPURAÇÃO ADICIONADA ---
+            if (!hasLoggedHTML && Date.now() - startTime > 45000 && lastQrCode) {
+                console.log('[DEBUG] Nenhum sinal de login após 45s. A registar o HTML da página...');
+                const pageContent = await page.content();
+                console.log('--- INÍCIO DO HTML DA PÁGINA ---');
+                console.log(pageContent);
+                console.log('--- FIM DO HTML DA PÁGINA ---');
+                hasLoggedHTML = true;
+            }
+            // --- FIM DA LÓGICA DE DEPURAÇÃO ---
+
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
         throw new Error('Timeout de 3 minutos atingido.');
