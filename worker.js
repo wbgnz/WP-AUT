@@ -136,13 +136,13 @@ async function handleConnectionLogin(connectionId) {
         await page.setViewportSize({ width: 1280, height: 800 });
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
-        console.log(`[QR] A aguardar a página de aterrissagem carregar...`);
-        await page.getByRole('heading', { name: 'Use o WhatsApp no seu computador' }).waitFor({ timeout: 45000 });
-        console.log(`[QR] Página de aterrissagem confirmada. A procurar QR Code...`);
+        // A CORREÇÃO ESTÁ AQUI: Removemos a espera pelo título e vamos direto para o loop.
+        console.log(`[QR] A procurar por QR Code ou sessão ativa...`);
         
         let lastQrCode = null;
 
         while (Date.now() - startTime < TIMEOUT_MS) {
+            // Verifica se já fez login (sucesso)
             try {
                 await page.waitForSelector('div#pane-side', { state: 'visible', timeout: 1000 });
                 console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
@@ -154,6 +154,7 @@ async function handleConnectionLogin(connectionId) {
                 return;
             } catch (e) { /* Login ainda não aconteceu, o que é normal. Continue... */ }
 
+            // Se não fez login, procura por um QR code para atualizar
             try {
                 const qrLocator = page.locator('div[data-ref]');
                 await qrLocator.waitFor({ state: 'visible', timeout: 10000 });
@@ -226,7 +227,7 @@ app.post('/connections', async (req, res) => {
       criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    handleConnectionLogin(connectionRef.id);
+    handleConnectionLogin(connectionId);
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
     res.status(500).send({ error: 'Falha ao criar conexão.' });
