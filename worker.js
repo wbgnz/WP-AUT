@@ -92,8 +92,7 @@ async function executarCampanha(campanha) {
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
     await page.goto('https://web.whatsapp.com');
-    // CORREÇÃO: Espera pelo sinal de login mais fiável
-    await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
+    await page.locator('div#pane-side').waitFor({ state: 'visible' }); // Espera pelo painel de conversas
     await handlePopups(page);
     const mensagemTemplate = campanha.mensagemTemplate;
 
@@ -148,16 +147,18 @@ async function handleConnectionLogin(connectionId) {
         let lastQrCode = null;
 
         while (Date.now() - startTime < TIMEOUT_MS) {
+            // A CORREÇÃO ESTÁ AQUI: Usamos Promise.race para esperar pelo primeiro evento que acontecer
             const qrLocator = page.locator('div[data-ref]');
-            // CORREÇÃO: Usamos um seletor mais fiável para a barra de pesquisa.
-            const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
+            const loggedInLocator = page.locator('div#pane-side'); // O painel de conversas que aparece após o login
 
             try {
+                // Espera pelo primeiro dos dois elementos a aparecer
                 await Promise.race([
                     qrLocator.waitFor({ state: 'visible', timeout: 20000 }),
                     loggedInLocator.waitFor({ state: 'visible', timeout: 20000 })
                 ]);
 
+                // Verifica qual dos dois apareceu
                 if (await loggedInLocator.isVisible()) {
                     console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
                     await connectionRef.update({
@@ -165,7 +166,7 @@ async function handleConnectionLogin(connectionId) {
                         qrCode: FieldValue.delete(),
                     });
                     if (context) await context.close();
-                    return;
+                    return; // Sucesso, sai da função
                 }
 
                 if (await qrLocator.isVisible()) {
