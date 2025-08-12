@@ -134,27 +134,22 @@ async function handleConnectionLogin(connectionId, phoneNumber) {
         await page.goto('https://web.whatsapp.com');
         console.log(`[LOGIN] Aguardando página de login para ${connectionId}...`);
 
-        // 1. Clica no link "Conectar com número de telefone"
         const linkButton = page.getByText('Conectar com o número de telefone');
         await linkButton.waitFor({ state: 'visible', timeout: 60000 });
         await linkButton.click();
         console.log('[LOGIN] Clicou em "Conectar com número de telefone".');
 
-        // 2. Insere o número de telefone
         const numberWithoutCountryCode = phoneNumber.substring(2);
         const phoneInput = page.getByLabel('Número de telefone');
         await phoneInput.waitFor({ state: 'visible', timeout: 10000 });
         await phoneInput.fill(numberWithoutCountryCode);
         console.log(`[LOGIN] Inseriu o número: ${numberWithoutCountryCode}`);
 
-        // 3. Clica em "Avançar"
         const nextButton = page.getByRole('button', { name: 'Avançar' });
         await nextButton.click();
         console.log('[LOGIN] Clicou em "Avançar".');
         
-        // 4. Loop para ler o código e verificar o login
         while (Date.now() - startTime < TIMEOUT_MS) {
-            // Verifica se já fez login (sucesso)
             try {
                 await page.waitForSelector('div#pane-side', { state: 'visible', timeout: 1000 });
                 console.log(`[LOGIN] Login bem-sucedido para ${connectionId}!`);
@@ -163,7 +158,6 @@ async function handleConnectionLogin(connectionId, phoneNumber) {
                 return;
             } catch (e) { /* Continue... */ }
 
-            // Procura pelo código de 8 caracteres
             try {
                 const codeLocator = page.locator('div[data-testid="link-device-phone-number-code-screen-code"] span');
                 await codeLocator.first().waitFor({ state: 'visible', timeout: 5000 });
