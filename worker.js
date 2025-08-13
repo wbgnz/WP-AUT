@@ -54,7 +54,7 @@ async function handlePopups(page) {
     console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.'); 
 }
 
-// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA ---
+// --- FUNÇÃO PRINCIPAL DE EXECUÇÃO DA CAMPANHA (ATUALIZADA) ---
 async function executarCampanha(campanha) {
   console.log(`[WORKER] Iniciando execução da campanha ID: ${campanha.id}`);
   const campanhaRef = db.collection('campanhas').doc(campanha.id);
@@ -91,7 +91,20 @@ async function executarCampanha(campanha) {
     const page = context.pages()[0];
     page.setDefaultTimeout(90000);
     await page.goto('https://web.whatsapp.com');
-    await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
+
+    // --- LÓGICA DE CARREGAMENTO ROBUSTA ---
+    console.log('[WORKER] A verificar o estado do login...');
+    const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
+    try {
+        await loggedInLocator.waitFor({ state: 'visible', timeout: 45000 });
+    } catch (e) {
+        console.warn('[WORKER] A página parece estar presa. A tentar recarregar...');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await loggedInLocator.waitFor({ state: 'visible', timeout: 45000 });
+    }
+    console.log('[WORKER] Login da conexão confirmado.');
+    // --- FIM DA LÓGICA DE CARREGAMENTO ---
+
     await handlePopups(page);
     const mensagemTemplate = campanha.mensagemTemplate;
 
