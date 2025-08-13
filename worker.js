@@ -14,8 +14,13 @@ let serviceAccount;
 try {
   serviceAccount = require('./firebase-service-account.json');
 } catch (error) {
-  console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado.");
-  process.exit(1);
+  // No Render, as credenciais virão das variáveis de ambiente
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado e a variável de ambiente não está configurada.");
+    process.exit(1);
+  }
 }
 
 admin.initializeApp({
@@ -122,7 +127,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
