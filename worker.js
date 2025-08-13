@@ -146,11 +146,9 @@ async function handleConnectionLogin(connectionId) {
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
         console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
-        // A CORREÇÃO ESTÁ AQUI: Esperamos pelo sinal de sucesso, que é a barra de pesquisa aparecer.
         const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
         await loggedInLocator.waitFor({ state: 'visible', timeout: 120000 });
 
-        // Se chegámos aqui, a validação foi um sucesso!
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
@@ -197,24 +195,36 @@ app.post('/start-campaign', async (req, res) => {
     console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error);
   }
 });
+
+// A CORREÇÃO ESTÁ AQUI
 app.post('/connections', async (req, res) => {
   const { name } = req.body;
   if (!name) {
     return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   }
+  
+  let connectionRef;
   try {
-    const connectionRef = await db.collection('conexoes').add({
+    connectionRef = await db.collection('conexoes').add({
       name: name,
       status: 'generating_qrcode',
       criadoEm: FieldValue.serverTimestamp(),
     });
-    res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    handleConnectionLogin(connectionId);
-  } catch (error) {
-    console.error('[API] Erro ao criar conexão:', error);
-    res.status(500).send({ error: 'Falha ao criar conexão.' });
+  } catch (dbError) {
+    console.error('[API] Erro ao criar documento de conexão no Firestore:', dbError);
+    return res.status(500).send({ error: 'Falha ao criar conexão no banco de dados.' });
   }
+
+  // Responde ao frontend imediatamente
+  res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
+  
+  // Inicia o processo de login em segundo plano, sem o try...catch que causava o erro
+  handleConnectionLogin(connectionRef.id).catch(loginError => {
+      console.error(`[API] Erro em segundo plano ao gerar QR Code para ${connectionRef.id}:`, loginError);
+  });
 });
+
+
 app.get('/connections/:id', async (req, res) => {
     const { id } = req.params;
     try {
