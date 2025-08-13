@@ -121,7 +121,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (ATUALIZADA COM A SUA SUGESTÃO) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -146,16 +146,9 @@ async function handleConnectionLogin(connectionId) {
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
         console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
-        await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
-        console.log('[QR] Leitura detetada! A validar a conexão...');
-
-        // A SUA SUGESTÃO: Tentar iniciar uma conversa para validar
-        const testPhoneNumber = '5511999999999'; // Um número qualquer, apenas para o teste
-        await page.goto(`https://web.whatsapp.com/send?phone=${testPhoneNumber}`, { waitUntil: 'domcontentloaded' });
-
-        // O teste final: conseguimos encontrar a caixa de mensagem?
-        const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' });
-        await messageBox.waitFor({ state: 'visible', timeout: 30000 });
+        // A CORREÇÃO ESTÁ AQUI: Esperamos pelo sinal de sucesso, que é a barra de pesquisa aparecer.
+        const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
+        await loggedInLocator.waitFor({ state: 'visible', timeout: 120000 });
 
         // Se chegámos aqui, a validação foi um sucesso!
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
@@ -216,7 +209,7 @@ app.post('/connections', async (req, res) => {
       criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    handleConnectionLogin(connectionRef.id);
+    handleConnectionLogin(connectionId);
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
     res.status(500).send({ error: 'Falha ao criar conexão.' });
