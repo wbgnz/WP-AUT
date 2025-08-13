@@ -126,6 +126,8 @@ async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
+    const TIMEOUT_MS = 180000; // 3 minutos
+    const startTime = Date.now();
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
@@ -139,18 +141,50 @@ async function handleConnectionLogin(connectionId) {
         
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
-        console.log(`[QR] A aguardar pelo QR Code...`);
-        const qrLocator = page.locator('div[data-ref]');
-        await qrLocator.waitFor({ state: 'visible', timeout: 60000 });
-        const qrCodeData = await qrLocator.getAttribute('data-ref');
-        await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
+        console.log(`[QR] A procurar por QR Code ou sessão ativa...`);
+        
+        let lastQrCode = null;
 
-        console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
-        const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
-        await loggedInLocator.waitFor({ state: 'visible', timeout: 120000 });
+        while (Date.now() - startTime < TIMEOUT_MS) {
+            const qrLocator = page.locator('div[data-ref]');
+            const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
 
-        console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
-        await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
+            try {
+                // Espera pelo primeiro dos dois elementos a aparecer
+                await Promise.race([
+                    qrLocator.waitFor({ state: 'visible', timeout: 20000 }),
+                    loggedInLocator.waitFor({ state: 'visible', timeout: 20000 })
+                ]);
+
+                // Verifica qual dos dois apareceu
+                if (await loggedInLocator.isVisible()) {
+                    console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
+                    await connectionRef.update({
+                        status: 'conectado',
+                        qrCode: FieldValue.delete(),
+                    });
+                    if (context) await context.close();
+                    return; // Sucesso, sai da função
+                }
+
+                if (await qrLocator.isVisible()) {
+                    const qrCodeData = await qrLocator.getAttribute('data-ref');
+                    if (qrCodeData && qrCodeData !== lastQrCode) {
+                        console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
+                        await connectionRef.update({
+                            status: 'awaiting_scan',
+                            qrCode: qrCodeData,
+                        });
+                        lastQrCode = qrCodeData;
+                    }
+                }
+            } catch (e) {
+                console.log(`[QR] Nenhum elemento (QR ou Login) visível, a tentar novamente...`);
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+        throw new Error('Timeout de 3 minutos atingido.');
         
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
@@ -158,7 +192,7 @@ async function handleConnectionLogin(connectionId) {
         try {
             await connectionRef.update({ 
                 status: 'desconectado', 
-                error: 'Falha na validação pós-scan. Por favor, tente novamente.',
+                error: 'Timeout: QR Code não foi escaneado em 3 minutos.',
                 qrCode: FieldValue.delete()
             });
         } catch (updateError) {
@@ -195,36 +229,24 @@ app.post('/start-campaign', async (req, res) => {
     console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error);
   }
 });
-
-// A CORREÇÃO ESTÁ AQUI
 app.post('/connections', async (req, res) => {
   const { name } = req.body;
   if (!name) {
     return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   }
-  
-  let connectionRef;
   try {
-    connectionRef = await db.collection('conexoes').add({
+    const connectionRef = await db.collection('conexoes').add({
       name: name,
       status: 'generating_qrcode',
       criadoEm: FieldValue.serverTimestamp(),
     });
-  } catch (dbError) {
-    console.error('[API] Erro ao criar documento de conexão no Firestore:', dbError);
-    return res.status(500).send({ error: 'Falha ao criar conexão no banco de dados.' });
+    res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
+    handleConnectionLogin(connectionRef.id);
+  } catch (error) {
+    console.error('[API] Erro ao criar conexão:', error);
+    res.status(500).send({ error: 'Falha ao criar conexão.' });
   }
-
-  // Responde ao frontend imediatamente
-  res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-  
-  // Inicia o processo de login em segundo plano, sem o try...catch que causava o erro
-  handleConnectionLogin(connectionRef.id).catch(loginError => {
-      console.error(`[API] Erro em segundo plano ao gerar QR Code para ${connectionRef.id}:`, loginError);
-  });
 });
-
-
 app.get('/connections/:id', async (req, res) => {
     const { id } = req.params;
     try {
