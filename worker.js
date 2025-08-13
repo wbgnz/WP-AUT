@@ -11,16 +11,10 @@ const SESSIONS_BASE_PATH = process.env.NODE_ENV === 'production' ? '/data/sessio
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
-try {
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
   serviceAccount = require('./firebase-service-account.json');
-} catch (error) {
-  // No Render, as credenciais virão das variáveis de ambiente
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else {
-    console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado e a variável de ambiente não está configurada.");
-    process.exit(1);
-  }
 }
 
 admin.initializeApp({
@@ -127,13 +121,11 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (ATUALIZADA COM A SUA SUGESTÃO) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
-    const TIMEOUT_MS = 180000; // 3 minutos
-    const startTime = Date.now();
 
     try {
         console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
@@ -147,48 +139,27 @@ async function handleConnectionLogin(connectionId) {
         
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
-        console.log(`[QR] A procurar por QR Code ou sessão ativa...`);
-        
-        let lastQrCode = null;
+        console.log(`[QR] A aguardar pelo QR Code...`);
+        const qrLocator = page.locator('div[data-ref]');
+        await qrLocator.waitFor({ state: 'visible', timeout: 60000 });
+        const qrCodeData = await qrLocator.getAttribute('data-ref');
+        await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
-        while (Date.now() - startTime < TIMEOUT_MS) {
-            const qrLocator = page.locator('div[data-ref]');
-            const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
+        console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
+        await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
+        console.log('[QR] Leitura detetada! A validar a conexão...');
 
-            try {
-                await Promise.race([
-                    qrLocator.waitFor({ state: 'visible', timeout: 20000 }),
-                    loggedInLocator.waitFor({ state: 'visible', timeout: 20000 })
-                ]);
+        // A SUA SUGESTÃO: Tentar iniciar uma conversa para validar
+        const testPhoneNumber = '5511999999999'; // Um número qualquer, apenas para o teste
+        await page.goto(`https://web.whatsapp.com/send?phone=${testPhoneNumber}`, { waitUntil: 'domcontentloaded' });
 
-                if (await loggedInLocator.isVisible()) {
-                    console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
-                    await connectionRef.update({
-                        status: 'conectado',
-                        qrCode: FieldValue.delete(),
-                    });
-                    if (context) await context.close();
-                    return;
-                }
+        // O teste final: conseguimos encontrar a caixa de mensagem?
+        const messageBox = page.getByRole('textbox', { name: 'Digite uma mensagem' });
+        await messageBox.waitFor({ state: 'visible', timeout: 30000 });
 
-                if (await qrLocator.isVisible()) {
-                    const qrCodeData = await qrLocator.getAttribute('data-ref');
-                    if (qrCodeData && qrCodeData !== lastQrCode) {
-                        console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
-                        await connectionRef.update({
-                            status: 'awaiting_scan',
-                            qrCode: qrCodeData,
-                        });
-                        lastQrCode = qrCodeData;
-                    }
-                }
-            } catch (e) {
-                console.log(`[QR] Nenhum elemento (QR ou Login) visível, a tentar novamente...`);
-            }
-            
-            await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-        throw new Error('Timeout de 3 minutos atingido.');
+        // Se chegámos aqui, a validação foi um sucesso!
+        console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
+        await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
@@ -196,7 +167,7 @@ async function handleConnectionLogin(connectionId) {
         try {
             await connectionRef.update({ 
                 status: 'desconectado', 
-                error: 'Timeout: QR Code não foi escaneado em 3 minutos.',
+                error: 'Falha na validação pós-scan. Por favor, tente novamente.',
                 qrCode: FieldValue.delete()
             });
         } catch (updateError) {
@@ -216,11 +187,9 @@ const app = express();
 app.use(cors()); 
 app.use(express.json());
 const PORT = process.env.PORT || 10000;
-
 app.get('/', (req, res) => {
   res.send('Motor de automação do WhatsApp está online e pronto.');
 });
-
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
   if (!campaignId) return res.status(400).send({ error: 'campaignId é obrigatório.' });
@@ -235,7 +204,6 @@ app.post('/start-campaign', async (req, res) => {
     console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error);
   }
 });
-
 app.post('/connections', async (req, res) => {
   const { name } = req.body;
   if (!name) {
@@ -254,7 +222,6 @@ app.post('/connections', async (req, res) => {
     res.status(500).send({ error: 'Falha ao criar conexão.' });
   }
 });
-
 app.get('/connections/:id', async (req, res) => {
     const { id } = req.params;
     try {
@@ -266,7 +233,6 @@ app.get('/connections/:id', async (req, res) => {
         res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
     }
 });
-
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
 });
