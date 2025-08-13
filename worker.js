@@ -11,10 +11,11 @@ const SESSIONS_BASE_PATH = process.env.NODE_ENV === 'production' ? '/data/sessio
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
+try {
   serviceAccount = require('./firebase-service-account.json');
+} catch (error) {
+  console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado.");
+  process.exit(1);
 }
 
 admin.initializeApp({
@@ -121,16 +122,16 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM CÓDIGO ---
-async function handleConnectionLogin(connectionId, phoneNumber) {
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL) ---
+async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
-    const TIMEOUT_MS = 120000; // 2 minutos
+    const TIMEOUT_MS = 180000; // 3 minutos
     const startTime = Date.now();
 
     try {
-        console.log(`[LOGIN] Iniciando instância para conexão ${connectionId}`);
+        console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
         context = await chromium.launchPersistentContext(sessionPath, { 
             headless: IS_HEADLESS,
             args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -140,62 +141,67 @@ async function handleConnectionLogin(connectionId, phoneNumber) {
         const page = context.pages()[0] || await context.newPage();
         
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        console.log(`[LOGIN] Aguardando página de login para ${connectionId}...`);
-
-        // 1. Clica no link "Entrar com número de telefone"
-        const linkButton = page.getByRole('button', { name: 'Entrar com número de telefone' });
-        await linkButton.waitFor({ state: 'visible', timeout: 60000 });
-        await linkButton.click();
-        console.log('[LOGIN] Clicou em "Entrar com número de telefone".');
-
-        // 2. Insere o número de telefone
-        const numberWithoutCountryCode = phoneNumber.substring(2);
-        const phoneInput = page.getByLabel('Número de telefone');
-        await phoneInput.waitFor({ state: 'visible', timeout: 10000 });
-        await phoneInput.fill(numberWithoutCountryCode);
-        console.log(`[LOGIN] Inseriu o número: ${numberWithoutCountryCode}`);
-
-        // 3. Clica em "Avançar"
-        const nextButton = page.getByRole('button', { name: 'Avançar' });
-        await nextButton.click();
-        console.log('[LOGIN] Clicou em "Avançar".');
         
-        // 4. Loop para ler o código e verificar o login
+        console.log(`[QR] A procurar por QR Code ou sessão ativa...`);
+        
+        let lastQrCode = null;
+
         while (Date.now() - startTime < TIMEOUT_MS) {
-            try {
-                await page.locator('div#pane-side').waitFor({ state: 'visible', timeout: 1000 });
-                console.log(`[LOGIN] Login bem-sucedido para ${connectionId}!`);
-                await connectionRef.update({ status: 'conectado', loginCode: FieldValue.delete() });
-                if (context) await context.close();
-                return;
-            } catch (e) { /* Continue... */ }
+            const qrLocator = page.locator('div[data-ref]');
+            const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
 
             try {
-                const codeContainer = page.locator('div[data-link-code]');
-                await codeContainer.waitFor({ state: 'visible', timeout: 5000 });
-                const loginCodeWithComma = await codeContainer.getAttribute('data-link-code');
-                
-                if (loginCodeWithComma) {
-                    const loginCode = loginCodeWithComma.replace(/,/g, '');
-                    if (loginCode && loginCode.length === 8) {
-                        console.log(`[LOGIN] Código detectado: ${loginCode}. Atualizando Firestore.`);
-                        await connectionRef.update({ status: 'awaiting_code_entry', loginCode: loginCode });
+                await Promise.race([
+                    qrLocator.waitFor({ state: 'visible', timeout: 20000 }),
+                    loggedInLocator.waitFor({ state: 'visible', timeout: 20000 })
+                ]);
+
+                if (await loggedInLocator.isVisible()) {
+                    console.log(`[QR] Login bem-sucedido para ${connectionId}!`);
+                    await connectionRef.update({
+                        status: 'conectado',
+                        qrCode: FieldValue.delete(),
+                    });
+                    if (context) await context.close();
+                    return;
+                }
+
+                if (await qrLocator.isVisible()) {
+                    const qrCodeData = await qrLocator.getAttribute('data-ref');
+                    if (qrCodeData && qrCodeData !== lastQrCode) {
+                        console.log(`[QR] QR Code detectado/atualizado. Atualizando Firestore.`);
+                        await connectionRef.update({
+                            status: 'awaiting_scan',
+                            qrCode: qrCodeData,
+                        });
+                        lastQrCode = qrCodeData;
                     }
                 }
             } catch (e) {
-                console.log(`[LOGIN] Código de login não visível, aguardando...`);
+                console.log(`[QR] Nenhum elemento (QR ou Login) visível, a tentar novamente...`);
             }
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
-        throw new Error('Timeout de 2 minutos atingido.');
+        throw new Error('Timeout de 3 minutos atingido.');
         
     } catch (error) {
-        console.error(`[LOGIN] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
-        await connectionRef.update({ status: 'desconectado', error: 'Falha no processo de login.' });
+        console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
+        
+        try {
+            await connectionRef.update({ 
+                status: 'desconectado', 
+                error: 'Timeout: QR Code não foi escaneado em 3 minutos.',
+                qrCode: FieldValue.delete()
+            });
+        } catch (updateError) {
+            console.warn(`[QR] Não foi possível atualizar o status da conexão ${connectionId} (provavelmente foi apagada):`, updateError.message);
+        }
+
     } finally {
         if (context) {
             await context.close();
-            console.log(`[LOGIN] Instância para ${connectionId} fechada.`);
+            console.log(`[QR] Instância para ${connectionId} fechada.`);
         }
     }
 }
@@ -226,19 +232,18 @@ app.post('/start-campaign', async (req, res) => {
 });
 
 app.post('/connections', async (req, res) => {
-  const { name, phoneNumber } = req.body;
-  if (!name || !phoneNumber) {
-    return res.status(400).send({ error: 'O nome e o número de telefone são obrigatórios.' });
+  const { name } = req.body;
+  if (!name) {
+    return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   }
   try {
     const connectionRef = await db.collection('conexoes').add({
       name: name,
-      phoneNumber: phoneNumber,
-      status: 'generating_code',
+      status: 'generating_qrcode',
       criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    handleConnectionLogin(connectionRef.id, phoneNumber);
+    handleConnectionLogin(connectionRef.id);
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
     res.status(500).send({ error: 'Falha ao criar conexão.' });
