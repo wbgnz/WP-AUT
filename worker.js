@@ -121,14 +121,14 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO DE DEPURAÇÃO DE LOGIN ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
 
     try {
-        console.log(`[DEBUG] Iniciando instância de depuração para conexão ${connectionId}`);
+        console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
         context = await chromium.launchPersistentContext(sessionPath, { 
             headless: IS_HEADLESS,
             args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -139,41 +139,39 @@ async function handleConnectionLogin(connectionId) {
         
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
-        console.log(`[DEBUG] A aguardar pelo QR Code...`);
+        console.log(`[QR] A aguardar pelo QR Code...`);
         const qrLocator = page.locator('div[data-ref]');
         await qrLocator.waitFor({ state: 'visible', timeout: 60000 });
         const qrCodeData = await qrLocator.getAttribute('data-ref');
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
-        console.log('[DEBUG] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
+        console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
         await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
-        console.log('[DEBUG] Leitura detetada! A aguardar 10 segundos para a página carregar...');
-
-        await new Promise(resolve => setTimeout(resolve, 10000));
-
-        console.log('[DEBUG] A capturar o HTML da página pós-scan...');
-        const pageContent = await page.content();
-        
-        console.log('--- INÍCIO DO HTML DA PÁGINA (PÓS-SCAN) ---');
-        console.log(pageContent);
-        console.log('--- FIM DO HTML DA PÁGINA (PÓS-SCAN) ---');
+        console.log('[QR] Leitura detetada! A validar a conexão...');
 
         const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
-        if (await loggedInLocator.isVisible({ timeout: 5000 })) {
-            console.log('[DEBUG] SUCESSO! O seletor de login foi encontrado.');
-            await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
-        } else {
-            console.log('[DEBUG] FALHA: O seletor de login não foi encontrado.');
-            await connectionRef.update({ status: 'desconectado', error: 'Falha na verificação pós-scan.' });
-        }
+        await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
+
+        console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
+        await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
     } catch (error) {
-        console.error(`[DEBUG] Erro no processo de depuração para ${connectionId}:`, error);
-        await connectionRef.update({ status: 'desconectado', error: error.message });
+        console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
+        
+        try {
+            await connectionRef.update({ 
+                status: 'desconectado', 
+                error: 'Falha na validação pós-scan. Por favor, tente novamente.',
+                qrCode: FieldValue.delete()
+            });
+        } catch (updateError) {
+            console.warn(`[QR] Não foi possível atualizar o status da conexão ${connectionId} (provavelmente foi apagada):`, updateError.message);
+        }
+
     } finally {
         if (context) {
             await context.close();
-            console.log(`[DEBUG] Instância de depuração para ${connectionId} fechada.`);
+            console.log(`[QR] Instância para ${connectionId} fechada.`);
         }
     }
 }
