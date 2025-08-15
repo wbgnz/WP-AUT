@@ -3,7 +3,7 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs'); // Adicionado para gerir ficheiros
+const fs = require('fs');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES ---
@@ -23,6 +23,9 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = getFirestore();
+
+// --- CONTROLO DE CONCORRÊNCIA ---
+let isLoginProcessRunning = false;
 
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
 function delay(minSeconds, maxSeconds) { 
@@ -123,7 +126,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (COM SCREENSHOT) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -148,22 +151,18 @@ async function handleConnectionLogin(connectionId) {
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
         console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
-        await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
-        console.log('[QR] Leitura detetada! A validar a conexão...');
-
-        const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
-        await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
-
+        
+        // Esperamos que a URL mude, o que é um sinal fiável de login.
+        await page.waitForURL('**/chat', { timeout: 120000 });
+        
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         
-        // --- LÓGICA DE SCREENSHOT ADICIONADA ---
         if (context) {
             try {
-                // Garante que a pasta de screenshots existe no disco persistente
                 if (!fs.existsSync(SCREENSHOTS_PATH)) {
                     fs.mkdirSync(SCREENSHOTS_PATH, { recursive: true });
                 }
@@ -174,7 +173,6 @@ async function handleConnectionLogin(connectionId) {
                 console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
             }
         }
-        // --- FIM DA LÓGICA DE SCREENSHOT ---
 
         try {
             await connectionRef.update({ 
@@ -199,9 +197,11 @@ const app = express();
 app.use(cors()); 
 app.use(express.json());
 const PORT = process.env.PORT || 10000;
+
 app.get('/', (req, res) => {
   res.send('Motor de automação do WhatsApp está online e pronto.');
 });
+
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
   if (!campaignId) return res.status(400).send({ error: 'campaignId é obrigatório.' });
@@ -216,24 +216,48 @@ app.post('/start-campaign', async (req, res) => {
     console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error);
   }
 });
+
 app.post('/connections', async (req, res) => {
+  if (isLoginProcessRunning) {
+    return res.status(429).send({ error: 'Um processo de conexão já está em andamento. Tente novamente em alguns minutos.' });
+  }
+  isLoginProcessRunning = true;
+
   const { name } = req.body;
   if (!name) {
+    isLoginProcessRunning = false;
     return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   }
+  
+  let connectionRef;
   try {
-    const connectionRef = await db.collection('conexoes').add({
+    connectionRef = await db.collection('conexoes').add({
       name: name,
       status: 'generating_qrcode',
       criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    handleConnectionLogin(connectionRef.id);
+    
+    await handleConnectionLogin(connectionRef.id);
+    isLoginProcessRunning = false;
+
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
-    res.status(500).send({ error: 'Falha ao criar conexão.' });
+    if (connectionRef && !res.headersSent) {
+        // Tenta atualizar o status para erro se a conexão foi criada mas o login falhou
+        try {
+            await db.collection('conexoes').doc(connectionRef.id).update({ status: 'erro', error: error.message });
+        } catch (dbError) {
+            console.error('[API] Falha ao atualizar status de erro da conexão:', dbError);
+        }
+    }
+    if (!res.headersSent) {
+        res.status(500).send({ error: 'Falha ao criar conexão.' });
+    }
+    isLoginProcessRunning = false;
   }
 });
+
 app.get('/connections/:id', async (req, res) => {
     const { id } = req.params;
     try {
@@ -245,6 +269,7 @@ app.get('/connections/:id', async (req, res) => {
         res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
     }
 });
+
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
 });
