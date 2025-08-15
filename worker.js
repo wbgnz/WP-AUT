@@ -24,6 +24,9 @@ admin.initializeApp({
 });
 const db = getFirestore();
 
+// --- CONTROLO DE CONCORRÊNCIA ---
+let isLoginProcessRunning = false;
+
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
 function delay(minSeconds, maxSeconds) { 
     const ms = (Math.random() * (maxSeconds - minSeconds) + minSeconds) * 1000; 
@@ -123,7 +126,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (COM SCREENSHOT PÓS-LEITURA) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -148,32 +151,29 @@ async function handleConnectionLogin(connectionId) {
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
         console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
-        await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
-        console.log('[QR] Leitura detetada! A aguardar 10 segundos e a tirar screenshot...');
-
-        // A SUA SUGESTÃO IMPLEMENTADA AQUI
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        try {
-            if (!fs.existsSync(SCREENSHOTS_PATH)) {
-                fs.mkdirSync(SCREENSHOTS_PATH, { recursive: true });
-            }
-            const screenshotPath = path.join(SCREENSHOTS_PATH, `pos_leitura_${connectionId}.png`);
-            await page.screenshot({ path: screenshotPath });
-            console.log(`[DEBUG] Screenshot pós-leitura salvo em: ${screenshotPath}`);
-        } catch (screenshotError) {
-            console.error('[DEBUG] Falha ao tirar screenshot pós-leitura:', screenshotError);
-        }
-        // FIM DA IMPLEMENTAÇÃO
-
-        const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
-        await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
-
+        
+        // Esperamos que a URL mude, o que é um sinal fiável de login.
+        await page.waitForURL('**/chat', { timeout: 120000 });
+        
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         
+        if (context) {
+            try {
+                if (!fs.existsSync(SCREENSHOTS_PATH)) {
+                    fs.mkdirSync(SCREENSHOTS_PATH, { recursive: true });
+                }
+                const screenshotPath = path.join(SCREENSHOTS_PATH, `erro_login_${connectionId}.png`);
+                await context.pages()[0].screenshot({ path: screenshotPath });
+                console.log(`[DEBUG] Screenshot de erro salvo em: ${screenshotPath}`);
+            } catch (screenshotError) {
+                console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
+            }
+        }
+
         try {
             await connectionRef.update({ 
                 status: 'desconectado', 
@@ -197,9 +197,11 @@ const app = express();
 app.use(cors()); 
 app.use(express.json());
 const PORT = process.env.PORT || 10000;
+
 app.get('/', (req, res) => {
   res.send('Motor de automação do WhatsApp está online e pronto.');
 });
+
 app.post('/start-campaign', async (req, res) => {
   const { campaignId } = req.body;
   if (!campaignId) return res.status(400).send({ error: 'campaignId é obrigatório.' });
@@ -214,6 +216,7 @@ app.post('/start-campaign', async (req, res) => {
     console.error(`[API] Erro ao iniciar a campanha ${campaignId}:`, error);
   }
 });
+
 app.post('/connections', async (req, res) => {
   if (isLoginProcessRunning) {
     return res.status(429).send({ error: 'Um processo de conexão já está em andamento. Tente novamente em alguns minutos.' });
@@ -241,6 +244,7 @@ app.post('/connections', async (req, res) => {
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
     if (connectionRef && !res.headersSent) {
+        // Tenta atualizar o status para erro se a conexão foi criada mas o login falhou
         try {
             await db.collection('conexoes').doc(connectionRef.id).update({ status: 'erro', error: error.message });
         } catch (dbError) {
@@ -265,6 +269,7 @@ app.get('/connections/:id', async (req, res) => {
         res.status(500).send({ error: 'Falha ao buscar status da conexão.' });
     }
 });
+
 app.listen(PORT, () => {
   console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
 });
