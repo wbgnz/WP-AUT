@@ -3,11 +3,13 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs'); // Adicionado para gerir ficheiros
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES ---
 const IS_HEADLESS = process.env.NODE_ENV === 'production'; 
 const SESSIONS_BASE_PATH = process.env.NODE_ENV === 'production' ? '/data/sessions' : './whatsapp_session_data';
+const SCREENSHOTS_PATH = process.env.NODE_ENV === 'production' ? '/data/screenshots' : './screenshots';
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
@@ -121,7 +123,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (COM SCREENSHOT) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -158,6 +160,22 @@ async function handleConnectionLogin(connectionId) {
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         
+        // --- LÓGICA DE SCREENSHOT ADICIONADA ---
+        if (context) {
+            try {
+                // Garante que a pasta de screenshots existe no disco persistente
+                if (!fs.existsSync(SCREENSHOTS_PATH)) {
+                    fs.mkdirSync(SCREENSHOTS_PATH, { recursive: true });
+                }
+                const screenshotPath = path.join(SCREENSHOTS_PATH, `erro_login_${connectionId}.png`);
+                await context.pages()[0].screenshot({ path: screenshotPath });
+                console.log(`[DEBUG] Screenshot de erro salvo em: ${screenshotPath}`);
+            } catch (screenshotError) {
+                console.error('[DEBUG] Falha ao tirar screenshot:', screenshotError);
+            }
+        }
+        // --- FIM DA LÓGICA DE SCREENSHOT ---
+
         try {
             await connectionRef.update({ 
                 status: 'desconectado', 
