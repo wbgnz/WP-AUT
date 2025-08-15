@@ -126,7 +126,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -151,10 +151,12 @@ async function handleConnectionLogin(connectionId) {
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
         console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
-        
-        // Esperamos que a URL mude, o que é um sinal fiável de login.
-        await page.waitForURL('**/chat', { timeout: 120000 });
-        
+        await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
+        console.log('[QR] Leitura detetada! A validar a conexão...');
+
+        const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
+        await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
+
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
@@ -221,40 +223,38 @@ app.post('/connections', async (req, res) => {
   if (isLoginProcessRunning) {
     return res.status(429).send({ error: 'Um processo de conexão já está em andamento. Tente novamente em alguns minutos.' });
   }
-  isLoginProcessRunning = true;
-
+  
   const { name } = req.body;
   if (!name) {
-    isLoginProcessRunning = false;
     return res.status(400).send({ error: 'O nome da conexão é obrigatório.' });
   }
   
   let connectionRef;
   try {
+    isLoginProcessRunning = true; // Bloqueia novas conexões
     connectionRef = await db.collection('conexoes').add({
       name: name,
       status: 'generating_qrcode',
       criadoEm: FieldValue.serverTimestamp(),
     });
+
+    // Responde ao frontend IMEDIATAMENTE
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
     
-    await handleConnectionLogin(connectionRef.id);
-    isLoginProcessRunning = false;
+    // Executa o processo de login em segundo plano
+    handleConnectionLogin(connectionRef.id)
+        .catch(err => console.error(`Erro não capturado no processo de login para ${connectionRef.id}:`, err))
+        .finally(() => {
+            isLoginProcessRunning = false; // Liberta o bloqueio
+            console.log(`[API] Processo de conexão para ${connectionRef.id} finalizado. Bloqueio libertado.`);
+        });
 
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
-    if (connectionRef && !res.headersSent) {
-        // Tenta atualizar o status para erro se a conexão foi criada mas o login falhou
-        try {
-            await db.collection('conexoes').doc(connectionRef.id).update({ status: 'erro', error: error.message });
-        } catch (dbError) {
-            console.error('[API] Falha ao atualizar status de erro da conexão:', dbError);
-        }
-    }
+    isLoginProcessRunning = false; // Garante que o bloqueio é libertado em caso de erro inicial
     if (!res.headersSent) {
         res.status(500).send({ error: 'Falha ao criar conexão.' });
     }
-    isLoginProcessRunning = false;
   }
 });
 
