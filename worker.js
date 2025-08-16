@@ -37,6 +37,7 @@ async function typeLikeHuman(locator, text) {
     await locator.type(text, { delay: Math.random() * 120 + 40 }); 
 }
 
+// --- FUNÇÃO DE POP-UPS ATUALIZADA ---
 async function handlePopups(page) { 
     console.log('[POPUP CHECK] Verificando a presença de pop-ups...'); 
     const possiblePopups = [ 
@@ -162,12 +163,13 @@ async function handleConnectionLogin(connectionId) {
 
         // A SUA SUGESTÃO IMPLEMENTADA: Espera o "Loading chats" desaparecer
         await page.locator('progress').waitFor({ state: 'hidden', timeout: 120000 });
+        
+        console.log('[QR] Carregamento concluído. A verificar pop-ups...');
+        await handlePopups(page); // Lida com pop-ups ANTES de confirmar o login
+
         const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
         await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
         
-        console.log('[QR] Login confirmado e estável.');
-        await handlePopups(page);
-
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
