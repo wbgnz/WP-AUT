@@ -40,16 +40,21 @@ async function typeLikeHuman(locator, text) {
     await locator.type(text, { delay: Math.random() * 120 + 40 }); 
 }
 
+// --- FUNÇÃO DE POP-UPS ATUALIZADA ---
 async function handlePopups(page) { 
     console.log('[FASE 2] Verificando a presença de pop-ups...'); 
     const possibleSelectors = [ 
+        // Adicionamos o seletor que você encontrou
+        page.getByRole('button', { name: 'Continue', exact: true }),
         page.getByRole('button', { name: 'Continuar' }), 
         page.getByRole('button', { name: /OK|Entendi|Concluir/i }), 
         page.getByLabel('Fechar', { exact: true }) 
     ]; 
     for (const selector of possibleSelectors) { 
         try { 
-            await selector.waitFor({ timeout: 3000 }); 
+            // Damos um pouco mais de tempo para o pop-up aparecer
+            await selector.waitFor({ timeout: 7000 }); 
+            console.log('[FASE 2] Pop-up encontrado! A fechar...');
             await selector.click({ force: true }); 
             console.log('[FASE 2] Pop-up fechado.'); 
             return; 
