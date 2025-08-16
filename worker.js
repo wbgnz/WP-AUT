@@ -37,7 +37,6 @@ async function typeLikeHuman(locator, text) {
     await locator.type(text, { delay: Math.random() * 120 + 40 }); 
 }
 
-// --- FUNÇÃO DE POP-UPS ATUALIZADA ---
 async function handlePopups(page) { 
     console.log('[POPUP CHECK] Verificando a presença de pop-ups...'); 
     const possiblePopups = [ 
@@ -100,7 +99,6 @@ async function executarCampanha(campanha) {
     await page.goto('https://web.whatsapp.com');
     
     console.log('[WORKER] A aguardar o carregamento completo da interface...');
-    // A SUA SUGESTÃO IMPLEMENTADA: Espera o "Loading chats" desaparecer
     await page.locator('progress').waitFor({ state: 'hidden', timeout: 120000 });
     await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
     console.log('[WORKER] Interface principal detetada e estável.');
