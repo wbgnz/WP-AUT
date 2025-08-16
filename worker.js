@@ -101,7 +101,14 @@ async function executarCampanha(campanha) {
     
     console.log('[WORKER] A aguardar o carregamento completo da interface...');
     await page.locator('progress').waitFor({ state: 'hidden', timeout: 120000 });
-    await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
+    
+    const loggedInLocatorPT = page.getByLabel('Caixa de texto de pesquisa');
+    const loggedInLocatorEN = page.getByLabel('Search or start a new chat');
+    await Promise.race([
+        loggedInLocatorPT.waitFor({ state: 'visible' }),
+        loggedInLocatorEN.waitFor({ state: 'visible' })
+    ]);
+    
     console.log('[WORKER] Interface principal detetada e estável.');
     await handlePopups(page);
 
@@ -161,14 +168,17 @@ async function handleConnectionLogin(connectionId) {
         await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
         console.log('[QR] Leitura detetada! A validar a conexão...');
 
-        // A SUA SUGESTÃO IMPLEMENTADA: Espera o "Loading chats" desaparecer
         await page.locator('progress').waitFor({ state: 'hidden', timeout: 120000 });
         
         console.log('[QR] Carregamento concluído. A verificar pop-ups...');
-        await handlePopups(page); // Lida com pop-ups ANTES de confirmar o login
+        await handlePopups(page);
 
-        const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
-        await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
+        const loggedInLocatorPT = page.getByLabel('Caixa de texto de pesquisa');
+        const loggedInLocatorEN = page.getByLabel('Search or start a new chat');
+        await Promise.race([
+            loggedInLocatorPT.waitFor({ state: 'visible', timeout: 60000 }),
+            loggedInLocatorEN.waitFor({ state: 'visible', timeout: 60000 })
+        ]);
         
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
