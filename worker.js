@@ -3,13 +3,12 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
-const { getStorage } = require('firebase-admin/storage');
 
 // --- CONFIGURAÇÕES ---
 const IS_HEADLESS = process.env.NODE_ENV === 'production'; 
-const SESSIONS_BASE_PATH = process.env.NODE_ENV === 'production' ? '/data/sessions' : './whatsapp_session_data';
+// A CORREÇÃO ESTÁ AQUI: Usamos um caminho local dentro da VM, não na pasta partilhada.
+const SESSIONS_BASE_PATH = './whatsapp_session_data';
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
@@ -20,11 +19,9 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 }
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  storageBucket: `${serviceAccount.project_id}.appspot.com` // Usa o project_id da chave de serviço
+  credential: admin.credential.cert(serviceAccount)
 });
 const db = getFirestore();
-const bucket = getStorage().bucket();
 
 // --- FUNÇÕES DO ROBÔ (Humanização) ---
 function delay(minSeconds, maxSeconds) { 
@@ -125,7 +122,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (COM UPLOAD DE SCREENSHOT) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
@@ -162,35 +159,14 @@ async function handleConnectionLogin(connectionId) {
     } catch (error) {
         console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
         
-        if (context) {
-            const screenshotPath = `/tmp/erro_login_${connectionId}.png`;
-            try {
-                await context.pages()[0].screenshot({ path: screenshotPath });
-                console.log(`[DEBUG] Screenshot temporário salvo em: ${screenshotPath}`);
-                
-                const destination = `debug_screenshots/erro_login_${connectionId}.png`;
-                await bucket.upload(screenshotPath, {
-                    destination: destination,
-                    public: true
-                });
-
-                const publicUrl = `https://storage.googleapis.com/${bucket.name}/${destination}`;
-                console.log(`[DEBUG] Screenshot enviado para o Firebase Storage.`);
-                console.log(`[DEBUG] URL PÚBLICA: ${publicUrl}`);
-
-            } catch (uploadError) {
-                console.error('[DEBUG] Falha ao fazer o upload do screenshot:', uploadError);
-            }
-        }
-
         try {
             await connectionRef.update({ 
                 status: 'desconectado', 
-                error: 'Falha na validação pós-scan. Screenshot gerado.',
+                error: 'Falha na validação pós-scan. Por favor, tente novamente.',
                 qrCode: FieldValue.delete()
             });
         } catch (updateError) {
-            console.warn(`[QR] Não foi possível atualizar o status da conexão ${connectionId}:`, updateError.message);
+            console.warn(`[QR] Não foi possível atualizar o status da conexão ${connectionId} (provavelmente foi apagada):`, updateError.message);
         }
 
     } finally {
