@@ -7,15 +7,15 @@ const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 // --- CONFIGURAÇÕES ---
 const IS_HEADLESS = process.env.NODE_ENV === 'production'; 
-// A CORREÇÃO ESTÁ AQUI: Usamos um caminho local dentro da VM, não na pasta partilhada.
 const SESSIONS_BASE_PATH = './whatsapp_session_data';
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
+try {
   serviceAccount = require('./firebase-service-account.json');
+} catch (error) {
+  console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado. Por favor, adicione-o à pasta do projeto.");
+  process.exit(1);
 }
 
 admin.initializeApp({
@@ -37,20 +37,28 @@ async function typeLikeHuman(locator, text) {
     await locator.type(text, { delay: Math.random() * 120 + 40 }); 
 }
 
+// --- FUNÇÃO DE POP-UPS ATUALIZADA ---
 async function handlePopups(page) { 
     console.log('[FASE 2] Verificando a presença de pop-ups...'); 
-    const possibleSelectors = [ 
-        page.getByRole('button', { name: 'Continuar' }), 
-        page.getByRole('button', { name: /OK|Entendi|Concluir/i }), 
-        page.getByLabel('Fechar', { exact: true }) 
+    const possiblePopups = [ 
+        { locator: page.getByRole('button', { name: 'Continue' }), name: 'Novo Visual' },
+        { locator: page.getByRole('button', { name: 'OK' }), name: 'OK Geral' },
+        { locator: page.getByRole('button', { name: /Entendi|Concluir/i }), name: 'Popup de Informação' }, 
+        { locator: page.getByLabel('Fechar', { exact: true }), name: 'Botão Fechar (X)' } 
     ]; 
-    for (const selector of possibleSelectors) { 
+    
+    for (const popup of possiblePopups) { 
         try { 
-            await selector.waitFor({ timeout: 3000 }); 
-            await selector.click({ force: true }); 
-            console.log('[FASE 2] Pop-up fechado.'); 
-            return; 
-        } catch (error) {} 
+            console.log(`[POPUP] A procurar por: "${popup.name}"...`);
+            await popup.locator.waitFor({ timeout: 5000 }); // Espera 5 segundos por cada popup
+            console.log(`[POPUP] Popup "${popup.name}" encontrado! A fechar...`);
+            await popup.locator.click({ force: true }); 
+            console.log(`[POPUP] Popup "${popup.name}" fechado com sucesso.`);
+            return; // Sai da função assim que fecha um popup
+        } catch (error) {
+            // Isto é normal se o popup não existir
+            console.log(`[POPUP] Popup "${popup.name}" não encontrado.`);
+        } 
     } 
     console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.'); 
 }
@@ -122,7 +130,7 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE (VERSÃO FINAL E ROBUSTA) ---
+// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE ---
 async function handleConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
