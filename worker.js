@@ -49,13 +49,13 @@ async function handlePopups(page) {
     
     for (const popup of possiblePopups) { 
         try { 
-            await popup.locator.waitFor({ timeout: 3000 }); // Espera apenas 3 segundos por cada
+            await popup.locator.waitFor({ timeout: 3000 });
             console.log(`[POPUP CHECK] Popup "${popup.name}" encontrado! A fechar...`);
             await popup.locator.click({ force: true }); 
             console.log(`[POPUP CHECK] Popup "${popup.name}" fechado com sucesso.`);
-            return; // Sai da função assim que fecha um popup
+            return;
         } catch (error) {
-            // Isto é normal se o popup não existir, continua para o próximo
+            // Continua para o próximo
         } 
     } 
     console.log('[POPUP CHECK] Nenhum pop-up conhecido foi encontrado.'); 
@@ -100,10 +100,11 @@ async function executarCampanha(campanha) {
     await page.goto('https://web.whatsapp.com');
     
     console.log('[WORKER] A aguardar o carregamento completo da interface...');
+    // A SUA SUGESTÃO IMPLEMENTADA: Espera o "Loading chats" desaparecer
+    await page.locator('progress').waitFor({ state: 'hidden', timeout: 120000 });
     await page.getByLabel('Caixa de texto de pesquisa').waitFor({ state: 'visible' });
-    console.log('[WORKER] Interface principal detetada. A aguardar estabilização...');
-    await page.waitForTimeout(5000); // Pausa de 5 segundos para a UI estabilizar
-    await handlePopups(page); // Agora verifica por pop-ups
+    console.log('[WORKER] Interface principal detetada e estável.');
+    await handlePopups(page);
 
     const mensagemTemplate = campanha.mensagemTemplate;
 
@@ -161,12 +162,13 @@ async function handleConnectionLogin(connectionId) {
         await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
         console.log('[QR] Leitura detetada! A validar a conexão...');
 
+        // A SUA SUGESTÃO IMPLEMENTADA: Espera o "Loading chats" desaparecer
+        await page.locator('progress').waitFor({ state: 'hidden', timeout: 120000 });
         const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
         await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
         
-        console.log('[QR] Login confirmado. A aguardar estabilização da interface...');
-        await page.waitForTimeout(5000); // Pausa de 5 segundos para a UI estabilizar
-        await handlePopups(page); // Agora verifica por pop-ups
+        console.log('[QR] Login confirmado e estável.');
+        await handlePopups(page);
 
         console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
