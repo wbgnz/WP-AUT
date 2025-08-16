@@ -5,16 +5,19 @@ const cors = require('cors');
 const path = require('path');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
-// --- CONFIGURAÇÕES ---
-const IS_HEADLESS = process.env.NODE_ENV === 'production'; 
-const SESSIONS_BASE_PATH = './whatsapp_session_data';
+// --- CONFIGURAÇÕES DE DEPURAÇÃO ---
+const MODO_DEBUG_LOCAL = true; // Mantenha 'true' para os testes locais
+// ----------------------------------
+
+const IS_HEADLESS = process.env.NODE_ENV === 'production' && !MODO_DEBUG_LOCAL; 
+const SESSIONS_BASE_PATH = process.env.NODE_ENV === 'production' ? '/data/sessions' : './whatsapp_session_data';
 
 // --- INICIALIZAÇÃO ---
 let serviceAccount;
 try {
   serviceAccount = require('./firebase-service-account.json');
 } catch (error) {
-  console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado. Por favor, adicione-o à pasta do projeto.");
+  console.error("Erro: O arquivo 'firebase-service-account.json' não foi encontrado.");
   process.exit(1);
 }
 
@@ -37,28 +40,20 @@ async function typeLikeHuman(locator, text) {
     await locator.type(text, { delay: Math.random() * 120 + 40 }); 
 }
 
-// --- FUNÇÃO DE POP-UPS ATUALIZADA ---
 async function handlePopups(page) { 
     console.log('[FASE 2] Verificando a presença de pop-ups...'); 
-    const possiblePopups = [ 
-        { locator: page.getByRole('button', { name: 'Continue' }), name: 'Novo Visual' },
-        { locator: page.getByRole('button', { name: 'OK' }), name: 'OK Geral' },
-        { locator: page.getByRole('button', { name: /Entendi|Concluir/i }), name: 'Popup de Informação' }, 
-        { locator: page.getByLabel('Fechar', { exact: true }), name: 'Botão Fechar (X)' } 
+    const possibleSelectors = [ 
+        page.getByRole('button', { name: 'Continuar' }), 
+        page.getByRole('button', { name: /OK|Entendi|Concluir/i }), 
+        page.getByLabel('Fechar', { exact: true }) 
     ]; 
-    
-    for (const popup of possiblePopups) { 
+    for (const selector of possibleSelectors) { 
         try { 
-            console.log(`[POPUP] A procurar por: "${popup.name}"...`);
-            await popup.locator.waitFor({ timeout: 5000 }); // Espera 5 segundos por cada popup
-            console.log(`[POPUP] Popup "${popup.name}" encontrado! A fechar...`);
-            await popup.locator.click({ force: true }); 
-            console.log(`[POPUP] Popup "${popup.name}" fechado com sucesso.`);
-            return; // Sai da função assim que fecha um popup
-        } catch (error) {
-            // Isto é normal se o popup não existir
-            console.log(`[POPUP] Popup "${popup.name}" não encontrado.`);
-        } 
+            await selector.waitFor({ timeout: 3000 }); 
+            await selector.click({ force: true }); 
+            console.log('[FASE 2] Pop-up fechado.'); 
+            return; 
+        } catch (error) {} 
     } 
     console.log('[FASE 2] Nenhum pop-up conhecido foi encontrado.'); 
 }
@@ -130,17 +125,17 @@ async function executarCampanha(campanha) {
   }
 }
 
-// --- FUNÇÃO INTELIGENTE PARA LOGIN COM QR CODE ---
-async function handleConnectionLogin(connectionId) {
+// --- FUNÇÃO DE DEPURAÇÃO DE LOGIN ---
+async function debugConnectionLogin(connectionId) {
     let context;
     const connectionRef = db.collection('conexoes').doc(connectionId);
     const sessionPath = path.join(SESSIONS_BASE_PATH, connectionId);
 
     try {
-        console.log(`[QR] Iniciando instância para conexão ${connectionId}`);
+        console.log(`[DEBUG] Iniciando instância de depuração para conexão ${connectionId}`);
         context = await chromium.launchPersistentContext(sessionPath, { 
             headless: IS_HEADLESS,
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            args: ['--no-sandbox'],
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
             viewport: { width: 1440, height: 900 }
         });
@@ -148,39 +143,40 @@ async function handleConnectionLogin(connectionId) {
         
         await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
-        console.log(`[QR] A aguardar pelo QR Code...`);
+        console.log(`[DEBUG] A aguardar pelo QR Code...`);
         const qrLocator = page.locator('div[data-ref]');
         await qrLocator.waitFor({ state: 'visible', timeout: 60000 });
         const qrCodeData = await qrLocator.getAttribute('data-ref');
         await connectionRef.update({ status: 'awaiting_scan', qrCode: qrCodeData });
 
-        console.log('[QR] QR Code visível. A aguardar leitura (timeout de 2 minutos)...');
+        console.log('[DEBUG] QR Code visível. Por favor, escaneie com o seu telemóvel. A aguardar leitura...');
         await qrLocator.waitFor({ state: 'hidden', timeout: 120000 });
-        console.log('[QR] Leitura detetada! A validar a conexão...');
+        console.log('[DEBUG] Leitura detetada!');
 
+        // --- PONTO DE DEPURAÇÃO ---
+        console.log('--------------------------------------------------');
+        console.log('[MODO DEBUG ATIVADO] O script está pausado.');
+        console.log('1. A página do WhatsApp (a carregar ou já carregada) deve estar visível.');
+        console.log('2. Use o "Pick locator" do Inspector e clique na BARRA DE PESQUISA de conversas (ou em qualquer elemento que confirme o login).');
+        console.log('3. Copie o seletor que o Inspector gerar.');
+        console.log('4. Cole o seletor aqui para nós e clique em "Resume" (▶).');
+        console.log('--------------------------------------------------');
+        await page.pause();
+        // --- FIM DO PONTO DE DEPURAÇÃO ---
+
+        // O código abaixo irá provavelmente falhar, mas o objetivo é a pausa acima.
         const loggedInLocator = page.getByLabel('Caixa de texto de pesquisa');
-        await loggedInLocator.waitFor({ state: 'visible', timeout: 60000 });
-
-        console.log(`[VALIDAÇÃO] Sucesso! Conexão para ${connectionId} está ativa.`);
+        await loggedInLocator.waitFor({ state: 'visible', timeout: 5000 });
+        console.log('[DEBUG] SUCESSO! O seletor de login foi encontrado.');
         await connectionRef.update({ status: 'conectado', qrCode: FieldValue.delete() });
         
     } catch (error) {
-        console.error(`[QR] Erro ou timeout no processo de conexão para ${connectionId}:`, error);
-        
-        try {
-            await connectionRef.update({ 
-                status: 'desconectado', 
-                error: 'Falha na validação pós-scan. Por favor, tente novamente.',
-                qrCode: FieldValue.delete()
-            });
-        } catch (updateError) {
-            console.warn(`[QR] Não foi possível atualizar o status da conexão ${connectionId} (provavelmente foi apagada):`, updateError.message);
-        }
-
+        console.error(`[DEBUG] Erro no processo de depuração para ${connectionId}:`, error);
+        await connectionRef.update({ status: 'desconectado', error: error.message });
     } finally {
         if (context) {
             await context.close();
-            console.log(`[QR] Instância para ${connectionId} fechada.`);
+            console.log(`[DEBUG] Instância de depuração para ${connectionId} fechada.`);
         }
     }
 }
@@ -192,7 +188,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
 app.get('/', (req, res) => {
-  res.send('Motor de automação do WhatsApp está online e pronto.');
+  res.send('Motor de automação do WhatsApp (Modo de Depuração) está online.');
 });
 
 app.post('/start-campaign', async (req, res) => {
@@ -222,7 +218,7 @@ app.post('/connections', async (req, res) => {
       criadoEm: FieldValue.serverTimestamp(),
     });
     res.status(201).send({ id: connectionRef.id, message: 'Conexão criada.' });
-    handleConnectionLogin(connectionRef.id);
+    debugConnectionLogin(connectionRef.id);
   } catch (error) {
     console.error('[API] Erro ao criar conexão:', error);
     res.status(500).send({ error: 'Falha ao criar conexão.' });
@@ -242,5 +238,5 @@ app.get('/connections/:id', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`[WORKER] Motor iniciado como servidor de API na porta ${PORT}.`);
+  console.log(`[WORKER] Motor (Modo de Depuração) iniciado na porta ${PORT}.`);
 });
